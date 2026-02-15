@@ -13,6 +13,37 @@ The MAC spoof flow disconnects Wi-Fi, tries multiple valid locally administered 
 swift run
 ```
 
+## Build Universal DMG (Local)
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APPLE_API_KEY_ID="ABC123XYZ" \
+APPLE_API_ISSUER_ID="00000000-0000-0000-0000-000000000000" \
+APPLE_API_KEY_PATH="$HOME/.private_keys/AuthKey_ABC123XYZ.p8" \
+./scripts/build-universal-dmg.sh
+```
+
+Artifacts:
+
+- app bundle: `dist/1132 Fixer.app`
+- universal DMG: `dist/1132 Fixer-universal.dmg`
+
+Alternative: provide key content directly instead of `APPLE_API_KEY_PATH`:
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+APPLE_API_KEY_ID="ABC123XYZ" \
+APPLE_API_ISSUER_ID="00000000-0000-0000-0000-000000000000" \
+APPLE_API_PRIVATE_KEY="$(cat "$HOME/.private_keys/AuthKey_ABC123XYZ.p8")" \
+./scripts/build-universal-dmg.sh
+```
+
+Optional: skip notarization (for local testing only):
+
+```bash
+SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARIZE=0 ./scripts/build-universal-dmg.sh
+```
+
 ## License and Risk
 
 This project is licensed under the terms in `LICENSE`.
