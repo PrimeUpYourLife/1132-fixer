@@ -12,42 +12,114 @@ final class AppViewModel: ObservableObject {
     set -euo pipefail
 
     # Find the hardware port named "Wi-Fi" (or "AirPort" on older macOS) and grab its device (en0/en1/...)
-    WIFI_DEV="$(
+    INTERFACE="$(
       networksetup -listallhardwareports \
       | awk '\''
-          $0 ~ /Hardware Port: (Wi-Fi|AirPort)/ {found=1}
-          found && $0 ~ /Device:/ {print $2; exit}
+          $0 ~ /Hardware Port: (Wi-Fi|AirPort)/ {found=1; next}
+          found && $0 ~ /Device:/ && dev == "" {dev=$2; found=0}
+          END {if (dev != "") print dev}
         '\''
     )"
 
-    if [[ -z "${WIFI_DEV:-}" ]]; then
+    if [[ -z "${INTERFACE:-}" ]]; then
       echo "Couldn't find a Wi-Fi interface (Wi-Fi/AirPort)."
       echo "Open System Settings and make sure Wi-Fi exists, then try again."
       exit 1
     fi
 
-    echo "Wi-Fi interface detected: $WIFI_DEV"
+    echo "Using Wi-Fi interface: $INTERFACE"
 
-    # Generate a valid locally administered MAC:
-    # - First octet 02 => locally administered + unicast
-    NEW_MAC=$(printf "02:%02X:%02X:%02X:%02X:%02X" \
-      $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
-    )
+    CURRENT_MAC=$(ifconfig "$INTERFACE" | awk "/ether/ {print \\$2; exit}")
+    if [[ -z "${CURRENT_MAC:-}" ]]; then
+      echo "Couldn't read current MAC address for $INTERFACE."
+      exit 1
+    fi
+    echo "Current MAC: $CURRENT_MAC"
 
-    echo "Setting new MAC: $NEW_MAC"
+    AIRPORT_CMD="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+    if [[ ! -x "$AIRPORT_CMD" ]]; then
+      AIRPORT_CMD="/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport"
+    fi
 
-    # Toggle Wi-Fi power off/on on the detected device
-    networksetup -setairportpower "$WIFI_DEV" off
+    disconnect_wifi() {
+      networksetup -setairportpower "$INTERFACE" on
+      sleep 1
+      if [[ -x "$AIRPORT_CMD" ]]; then
+        "$AIRPORT_CMD" -z || true
+      else
+        networksetup -setairportpower "$INTERFACE" off
+        sleep 2
+        networksetup -setairportpower "$INTERFACE" on
+      fi
+      sleep 2
+    }
 
-    # Apply MAC (requires sudo)
-    sudo ifconfig "$WIFI_DEV" ether "$NEW_MAC"
+    generate_current_prefix_candidate() {
+      local o1 o2 o3
+      IFS=":" read -r o1 o2 o3 _ <<< "$CURRENT_MAC"
+      local first=$(( (16#$o1 | 2) & 254 ))
+      printf "%02x:%s:%s:%02x:%02x:%02x" \
+        "$first" "$o2" "$o3" $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
+    }
 
-    networksetup -setairportpower "$WIFI_DEV" on
+    generate_local_candidate() {
+      local prefixes=(02 06 0a 0e)
+      local idx=$((RANDOM % ${#prefixes[@]}))
+      local pfx="${prefixes[$((idx + 1))]}"
+      printf "%s:%02x:%02x:%02x:%02x:%02x" \
+        "$pfx" $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
+    }
 
-    echo "Done. New MAC address on $WIFI_DEV is: $NEW_MAC"
+    apply_mac() {
+      local mac="$1"
+      if ifconfig "$INTERFACE" lladdr "$mac" >/dev/null 2>&1; then
+        return 0
+      fi
+      if ifconfig "$INTERFACE" ether "$mac" >/dev/null 2>&1; then
+        return 0
+      fi
+      return 1
+    }
+
+    echo "Step 1: Disconnecting from Wi-Fi while keeping interface available..."
+    disconnect_wifi
+
+    # Some drivers only accept specific patterns. Try a current-prefix variant first,
+    # then additional locally administered random candidates.
+    CANDIDATES=()
+    CANDIDATES+=("$(generate_current_prefix_candidate)")
+    CANDIDATES+=("$(generate_local_candidate)")
+    CANDIDATES+=("$(generate_local_candidate)")
+    CANDIDATES+=("$(generate_local_candidate)")
+    CANDIDATES+=("$(generate_local_candidate)")
+
+    APPLIED_MAC=""
+    for candidate in "${CANDIDATES[@]}"; do
+      echo "Step 2: Trying MAC candidate: $candidate"
+      if apply_mac "$candidate"; then
+        APPLIED_MAC="$candidate"
+        break
+      fi
+      disconnect_wifi
+    done
+
+    if [[ -z "$APPLIED_MAC" ]]; then
+      echo "ERROR: macOS rejected all generated MAC candidates for $INTERFACE."
+      echo "This can happen on newer hardware/OS builds that block Wi-Fi MAC changes."
+      exit 1
+    fi
+
+    echo "SUCCESS: Applied MAC candidate: $APPLIED_MAC"
+
+    echo "Step 3: Refreshing network hardware..."
+    networksetup -detectnewhardware
+
+    FINAL_MAC=$(ifconfig "$INTERFACE" | awk "/ether/ {print \\$2; exit}")
+    echo "Final Check: Current MAC on $INTERFACE is: $FINAL_MAC"
     echo "You can now open Zoom."
     """
 
+    // Redirect stdio to fully detach Zoom from this process so shell pipes can close immediately.
     private let zoomCommand = """
     nohup sandbox-exec -p '(version 1)
     (allow default)
@@ -56,7 +128,7 @@ final class AppViewModel: ObservableObject {
             #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db$"
             #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db-journal$"
         )
-    )' /Applications/zoom.us.app/Contents/MacOS/zoom.us &
+    )' /Applications/zoom.us.app/Contents/MacOS/zoom.us </dev/null >/dev/null 2>&1 &
     """
 
     func spoofMacAddress() {
@@ -155,7 +227,7 @@ final class AppViewModel: ObservableObject {
         }
 
         throw NSError(
-            domain: "SpoofZoomApp",
+            domain: "1132Fixer",
             code: Int(process.terminationStatus),
             userInfo: [NSLocalizedDescriptionKey: combined.isEmpty ? "Command failed with exit code \(process.terminationStatus)." : combined]
         )

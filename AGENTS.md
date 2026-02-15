@@ -35,5 +35,5 @@
 ## Agent Workflow
 - Read this file before making changes.
 - Prefer minimal diffs and keep unrelated files untouched.
-- Document notable behavior or command changes in `README.md` when relevant.
+- Keep `README.md` updated with notable behavior or command changes when relevant.
 

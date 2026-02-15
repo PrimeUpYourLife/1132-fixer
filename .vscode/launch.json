@@ -5,20 +5,20 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:1132-fixer}",
-            "name": "Debug SpoofZoomApp",
-            "target": "SpoofZoomApp",
+            "name": "Debug 1132FixerApp",
+            "target": "1132FixerApp",
             "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug SpoofZoomApp"
+            "preLaunchTask": "swift: Build Debug 1132FixerApp"
         },
         {
             "type": "swift",
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:1132-fixer}",
-            "name": "Release SpoofZoomApp",
-            "target": "SpoofZoomApp",
+            "name": "Release 1132FixerApp",
+            "target": "1132FixerApp",
             "configuration": "release",
-            "preLaunchTask": "swift: Build Release SpoofZoomApp"
+            "preLaunchTask": "swift: Build Release 1132FixerApp"
         },
         {
             "type": "swift",
