@@ -2,17 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "SpoofZoomApp",
+    name: "1132 Fixer",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "SpoofZoomApp", targets: ["SpoofZoomApp"])
+        .executable(name: "1132 Fixer", targets: ["1132Fixer"])
     ],
     targets: [
         .executableTarget(
-            name: "SpoofZoomApp",
-            path: "Sources/SpoofZoomApp"
+            name: "1132Fixer",
+            path: "Sources/1132Fixer",
+            resources: [
+                .process("Resources/AppIcon.png")
+            ]
         )
     ]
 )
+

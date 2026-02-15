@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:1132-fixer}",
+            "name": "Debug SpoofZoomApp",
+            "target": "SpoofZoomApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SpoofZoomApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:1132-fixer}",
+            "name": "Release SpoofZoomApp",
+            "target": "SpoofZoomApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SpoofZoomApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:1132-fixer}",
+            "name": "Debug 1132 Fixer",
+            "target": "1132 Fixer",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug 1132 Fixer"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:1132-fixer}",
+            "name": "Release 1132 Fixer",
+            "target": "1132 Fixer",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release 1132 Fixer"
+        }
+    ]
+}

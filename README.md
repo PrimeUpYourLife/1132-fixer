@@ -1,4 +1,4 @@
-# SpoofZoomApp
+# 1132 Fixer
 
 Minimal macOS SwiftUI app with two buttons:
 
@@ -9,16 +9,5 @@ Minimal macOS SwiftUI app with two buttons:
 
 ```bash
 swift run
-```
 
-## Build
 
-```bash
-swift build -c release
-```
-
-Binary path:
-
-```bash
-.build/release/SpoofZoomApp
-```
