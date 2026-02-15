@@ -36,4 +36,4 @@
 - Read this file before making changes.
 - Prefer minimal diffs and keep unrelated files untouched.
 - Keep `README.md` updated with notable behavior or command changes when relevant.
-
+- If unsure about a change's impact, ask for clarification before proceeding.
