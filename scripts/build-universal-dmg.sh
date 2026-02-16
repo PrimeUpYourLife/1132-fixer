@@ -5,10 +5,10 @@ APP_NAME="1132 Fixer"
 EXECUTABLE_NAME="1132 Fixer"
 TARGET_NAME="1132Fixer"
 BUNDLE_ID="com.local.1132fixer"
-MIN_MACOS="13.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="$ROOT_DIR/VERSION"
+MIN_MACOS_FILE="$ROOT_DIR/MIN_MACOS_VERSION"
 DIST_DIR="$ROOT_DIR/dist"
 TEMP_BUILD_ROOT="$ROOT_DIR/.build/universal"
 ARM64_BUILD_DIR="$TEMP_BUILD_ROOT/arm64"
@@ -17,9 +17,22 @@ UNIVERSAL_DIR="$TEMP_BUILD_ROOT/merged"
 APP_BUNDLE_DIR="$DIST_DIR/$APP_NAME.app"
 APP_VERSION="${APP_VERSION:-}"
 APP_BUILD="${APP_BUILD:-1}"
+# Determine minimum macOS version from environment or config file to avoid
+# duplicating the value defined elsewhere (e.g., in Package.swift).
+MIN_MACOS="${MIN_MACOS:-}"
+if [[ -z "$MIN_MACOS" ]]; then
+  if [[ -f "$MIN_MACOS_FILE" ]]; then
+    MIN_MACOS="$(tr -d '[:space:]' < "$MIN_MACOS_FILE")"
+  fi
+fi
+if [[ -z "$MIN_MACOS" ]]; then
+  echo "MIN_MACOS is empty. Set MIN_MACOS or populate $MIN_MACOS_FILE." >&2
+  exit 1
+fi
+
 if [[ -z "$APP_VERSION" ]]; then
   if [[ -f "$VERSION_FILE" ]]; then
-    APP_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+    APP_VERSION="$(tr -d '\n\r' < "$VERSION_FILE")"
   else
     echo "Missing VERSION file: $VERSION_FILE" >&2
     exit 1
@@ -66,7 +79,7 @@ X64_BIN="$X64_BUILD_DIR/release/$EXECUTABLE_NAME"
 UNIVERSAL_BIN="$UNIVERSAL_DIR/$EXECUTABLE_NAME"
 ARM64_RELEASE_DIR="$(dirname "$ARM64_BIN")"
 X64_RELEASE_DIR="$(dirname "$X64_BIN")"
-EXPECTED_RESOURCE_BUNDLE="$EXECUTABLE_NAME"_"$TARGET_NAME.bundle"
+EXPECTED_RESOURCE_BUNDLE="${EXECUTABLE_NAME}_${TARGET_NAME}.bundle"
 
 if [[ ! -f "$ARM64_BIN" ]]; then
   echo "arm64 binary not found: $ARM64_BIN" >&2
@@ -141,7 +154,7 @@ if [[ -f "$SOURCE_APP_ICON" ]]; then
   sips -z 256 256 "$SOURCE_APP_ICON" --out "$ICONSET_DIR/icon_256x256.png" >/dev/null
   sips -z 512 512 "$SOURCE_APP_ICON" --out "$ICONSET_DIR/icon_256x256@2x.png" >/dev/null
   sips -z 512 512 "$SOURCE_APP_ICON" --out "$ICONSET_DIR/icon_512x512.png" >/dev/null
-  cp "$SOURCE_APP_ICON" "$ICONSET_DIR/icon_512x512@2x.png"
+  sips -z 1024 1024 "$SOURCE_APP_ICON" --out "$ICONSET_DIR/icon_512x512@2x.png" >/dev/null
   iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE_DIR/Contents/Resources/AppIcon.icns"
 fi
 
@@ -172,7 +185,7 @@ if [[ "$NOTARIZE" == "1" ]]; then
   if [[ -n "$APPLE_API_KEY_PATH" ]]; then
     KEY_FILE="$APPLE_API_KEY_PATH"
   elif [[ -n "$APPLE_API_PRIVATE_KEY" ]]; then
-    KEY_FILE="$(mktemp -t "AuthKey_${APPLE_API_KEY_ID}.XXXXXX.p8")"
+    KEY_FILE="$(mktemp -t "AuthKey.XXXXXX.p8")"
     trap 'rm -f "$KEY_FILE"' EXIT
     printf '%s' "$APPLE_API_PRIVATE_KEY" > "$KEY_FILE"
   else
