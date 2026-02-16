@@ -6,14 +6,28 @@ import AppKit
 final class AppViewModel: ObservableObject {
     @Published var logs: [String] = []
     @Published var isRunning = false
-    private let startZoomCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null; sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder; open -a "zoom.us"'"#
+    private let resetZoomDataCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null'"#
+    private let refreshDNSAppleScript = #"do shell script "dscacheutil -flushcache; killall -HUP mDNSResponder" with administrator privileges"#
+    private let launchZoomCommand = #"/bin/bash -c 'open -a "zoom.us"'"#
 
     func startZoom() {
         runTask("Start Zoom") {
-            try self.runProcess(
+            let resetOutput = try self.runProcess(
                 executable: "/bin/zsh",
-                arguments: ["-lc", self.startZoomCommand]
+                arguments: ["-lc", self.resetZoomDataCommand]
             )
+            let dnsOutput = try self.runProcess(
+                executable: "/usr/bin/osascript",
+                arguments: ["-e", self.refreshDNSAppleScript]
+            )
+            let launchOutput = try self.runProcess(
+                executable: "/bin/zsh",
+                arguments: ["-lc", self.launchZoomCommand]
+            )
+
+            return [resetOutput, dnsOutput, launchOutput]
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .joined(separator: "\n")
         }
     }
 

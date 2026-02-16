@@ -4,9 +4,9 @@
 
 Minimal macOS app with one button:
 
-- `Start Zoom`: kills Zoom, clears Zoom local data/cache/preferences/log state, flushes system caches, and relaunches Zoom
+- `Start Zoom`: kills Zoom, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
 
-The app runs a single shell action for Error 1132 recovery via `/bin/bash -c`, including `sudo dscacheutil -flushcache` and `sudo killall -HUP mDNSResponder`.
+The app runs local recovery commands for Error 1132 and performs DNS cache reset via AppleScript (`do shell script ... with administrator privileges`) so macOS can present a native admin-password prompt.
 
 ## Updates
 
