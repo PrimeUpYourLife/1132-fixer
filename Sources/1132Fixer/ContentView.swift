@@ -1,155 +1,18 @@
 import SwiftUI
 import Foundation
+import AppKit
 
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var logs: [String] = []
     @Published var isRunning = false
-    @Published var hasSpoofedMacAddress = false
-
-    private let spoofScript = """
-    #!/bin/zsh
-    set -euo pipefail
-
-    # Find the hardware port named "Wi-Fi" (or "AirPort" on older macOS) and grab its device (en0/en1/...)
-    INTERFACE="$(
-      networksetup -listallhardwareports \
-      | awk '\''
-          $0 ~ /Hardware Port: (Wi-Fi|AirPort)/ {found=1; next}
-          found && $0 ~ /Device:/ && dev == "" {dev=$2; found=0}
-          END {if (dev != "") print dev}
-        '\''
-    )"
-
-    if [[ -z "${INTERFACE:-}" ]]; then
-      echo "Couldn't find a Wi-Fi interface (Wi-Fi/AirPort)."
-      echo "Open System Settings and make sure Wi-Fi exists, then try again."
-      exit 1
-    fi
-
-    echo "Using Wi-Fi interface: $INTERFACE"
-
-    CURRENT_MAC=$(ifconfig "$INTERFACE" | awk "/ether/ {print \\$2; exit}")
-    if [[ -z "${CURRENT_MAC:-}" ]]; then
-      echo "Couldn't read current MAC address for $INTERFACE."
-      exit 1
-    fi
-    echo "Current MAC: $CURRENT_MAC"
-
-    AIRPORT_CMD="/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
-    if [[ ! -x "$AIRPORT_CMD" ]]; then
-      AIRPORT_CMD="/System/Library/PrivateFrameworks/Apple80211.framework/Resources/airport"
-    fi
-
-    disconnect_wifi() {
-      networksetup -setairportpower "$INTERFACE" on
-      sleep 1
-      if [[ -x "$AIRPORT_CMD" ]]; then
-        "$AIRPORT_CMD" -z || true
-      else
-        networksetup -setairportpower "$INTERFACE" off
-        sleep 2
-        networksetup -setairportpower "$INTERFACE" on
-      fi
-      sleep 2
-    }
-
-    generate_current_prefix_candidate() {
-      local o1 o2 o3
-      IFS=":" read -r o1 o2 o3 _ <<< "$CURRENT_MAC"
-      local first=$(( (16#$o1 | 2) & 254 ))
-      printf "%02x:%s:%s:%02x:%02x:%02x" \
-        "$first" "$o2" "$o3" $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
-    }
-
-    generate_local_candidate() {
-      local prefixes=(02 06 0a 0e)
-      local idx=$((RANDOM % ${#prefixes[@]}))
-      local pfx="${prefixes[$((idx + 1))]}"
-      printf "%s:%02x:%02x:%02x:%02x:%02x" \
-        "$pfx" $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256))
-    }
-
-    apply_mac() {
-      local mac="$1"
-      if ifconfig "$INTERFACE" lladdr "$mac" >/dev/null 2>&1; then
-        return 0
-      fi
-      if ifconfig "$INTERFACE" ether "$mac" >/dev/null 2>&1; then
-        return 0
-      fi
-      return 1
-    }
-
-    echo "Step 1: Disconnecting from Wi-Fi while keeping interface available..."
-    disconnect_wifi
-
-    # Some drivers only accept specific patterns. Try a current-prefix variant first,
-    # then additional locally administered random candidates.
-    CANDIDATES=()
-    CANDIDATES+=("$(generate_current_prefix_candidate)")
-    CANDIDATES+=("$(generate_local_candidate)")
-    CANDIDATES+=("$(generate_local_candidate)")
-    CANDIDATES+=("$(generate_local_candidate)")
-    CANDIDATES+=("$(generate_local_candidate)")
-
-    APPLIED_MAC=""
-    for candidate in "${CANDIDATES[@]}"; do
-      echo "Step 2: Trying MAC candidate: $candidate"
-      if apply_mac "$candidate"; then
-        APPLIED_MAC="$candidate"
-        break
-      fi
-      disconnect_wifi
-    done
-
-    if [[ -z "$APPLIED_MAC" ]]; then
-      echo "ERROR: macOS rejected all generated MAC candidates for $INTERFACE."
-      echo "This can happen on newer hardware/OS builds that block Wi-Fi MAC changes."
-      exit 1
-    fi
-
-    echo "SUCCESS: Applied MAC candidate: $APPLIED_MAC"
-
-    echo "Step 3: Refreshing network hardware..."
-    networksetup -detectnewhardware
-
-    FINAL_MAC=$(ifconfig "$INTERFACE" | awk "/ether/ {print \\$2; exit}")
-    echo "Final Check: Current MAC on $INTERFACE is: $FINAL_MAC"
-    echo "You can now open Zoom."
-    """
-
-    // Redirect stdio to fully detach Zoom from this process so shell pipes can close immediately.
-    private let zoomCommand = """
-    nohup sandbox-exec -p '(version 1)
-    (allow default)
-    (deny file-read*
-        (regex
-            #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db$"
-            #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db-journal$"
-        )
-    )' /Applications/zoom.us.app/Contents/MacOS/zoom.us </dev/null >/dev/null 2>&1 &
-    """
-
-    func spoofMacAddress() {
-        runTask("Spoof MAC address", onSuccess: { self.hasSpoofedMacAddress = true }) {
-            let scriptURL = try self.writeTempScript(contents: self.spoofScript)
-            defer { try? FileManager.default.removeItem(at: scriptURL) }
-
-            let command = "/bin/zsh \(self.shellQuote(scriptURL.path))"
-            let appleScript = "do shell script \(self.appleScriptString(command)) with administrator privileges"
-            return try self.runProcess(
-                executable: "/usr/bin/osascript",
-                arguments: ["-e", appleScript]
-            )
-        }
-    }
+    private let startZoomCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null; sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder; open -a "zoom.us"'"#
 
     func startZoom() {
         runTask("Start Zoom") {
             try self.runProcess(
                 executable: "/bin/zsh",
-                arguments: ["-lc", self.zoomCommand]
+                arguments: ["-lc", self.startZoomCommand]
             )
         }
     }
@@ -192,14 +55,6 @@ final class AppViewModel: ObservableObject {
         logs.append("[\(timestamp)] \(text)")
     }
 
-    private func writeTempScript(contents: String) throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spoof-mac-\(UUID().uuidString).zsh")
-        try contents.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
-        return url
-    }
-
     private func runProcess(executable: String, arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -233,21 +88,15 @@ final class AppViewModel: ObservableObject {
         )
     }
 
-    private func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    private func appleScriptString(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
 }
 
 struct ContentView: View {
     @StateObject private var vm = AppViewModel()
     private let repositoryURL = URL(string: "https://github.com/PrimeUpYourLife/1132-fixer")!
+    private let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "dev"
+
+    @State private var updateAlertIsPresented = false
+    @State private var latestRelease: ReleaseInfo?
 
     var body: some View {
         ZStack {
@@ -263,24 +112,15 @@ struct ContentView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 18) {
-                HeaderCard(isRunning: vm.isRunning, repositoryURL: repositoryURL)
+                HeaderCard(isRunning: vm.isRunning, repositoryURL: repositoryURL, appVersion: appVersion)
 
                 HStack(spacing: 14) {
                     ActionCard(
-                        title: "1. Spoof MAC Address",
-                        subtitle: "Generates a locally administered Wi-Fi MAC and reapplies it using admin privileges.",
-                        systemImage: "network.badge.shield.half.filled",
-                        tint: Color(red: 0.12, green: 0.60, blue: 0.52),
-                        isDisabled: vm.isRunning,
-                        action: vm.spoofMacAddress
-                    )
-
-                    ActionCard(
-                        title: "2. Start Zoom",
-                        subtitle: "Launches Zoom with a focused sandbox policy that blocks selected local DB reads.",
+                        title: "Start Zoom",
+                        subtitle: "Resets Zoom local data and caches, refreshes DNS cache, then launches Zoom.",
                         systemImage: "video.circle.fill",
                         tint: Color(red: 0.13, green: 0.50, blue: 0.86),
-                        isDisabled: vm.isRunning || !vm.hasSpoofedMacAddress,
+                        isDisabled: vm.isRunning,
                         action: vm.startZoom
                     )
                 }
@@ -290,12 +130,42 @@ struct ContentView: View {
             .padding(20)
         }
         .frame(width: 760, height: 520)
+        .task {
+            // Only check for updates in packaged apps that have a real version.
+            guard appVersion != "dev" else { return }
+            guard latestRelease == nil else { return }
+
+            do {
+                let release = try await UpdateChecker.fetchLatestRelease()
+                if UpdateChecker.isUpdateAvailable(currentVersion: appVersion, latestVersion: release.version) {
+                    latestRelease = release
+                    updateAlertIsPresented = true
+                }
+            } catch {
+                // Silent failure: update checks should never block app usage.
+            }
+        }
+        .alert("Update Available", isPresented: $updateAlertIsPresented) {
+            if let release = latestRelease {
+                Button("Open Release") {
+                    NSWorkspace.shared.open(release.htmlURL)
+                }
+            }
+            Button("Later", role: .cancel) {}
+        } message: {
+            if let release = latestRelease {
+                Text("Version \(release.version) is available. You have \(appVersion).")
+            } else {
+                Text("A newer version is available.")
+            }
+        }
     }
 }
 
 private struct HeaderCard: View {
     let isRunning: Bool
     let repositoryURL: URL
+    let appVersion: String
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -313,9 +183,13 @@ private struct HeaderCard: View {
                     .font(.system(size: 29, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
 
-                Text("Bypass Error 1132 in 2 steps. No more messing with config files or terminal commands.")
+                Text("Bypass Error 1132 with one action. No more messing with config files or terminal commands.")
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.82))
+
+                Text("Version \(appVersion)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.72))
             }
 
             Spacer()

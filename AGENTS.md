@@ -18,6 +18,7 @@
 - Release binary: `.build/release/1132 Fixer`
 
 ## Code Guidelines
+- Update `VERSION` when making any code changes, even minor ones, to reflect the new version.
 - Keep code compatible with Swift 5.9 and macOS 13 APIs.
 - Prefer small, focused changes over broad refactors.
 - Preserve existing behavior unless the task explicitly requests behavior changes.

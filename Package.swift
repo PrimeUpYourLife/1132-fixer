@@ -13,10 +13,7 @@ let package = Package(
         .executableTarget(
             name: "1132Fixer",
             path: "Sources/1132Fixer",
-            resources: [
-                .process("Resources/AppIcon.png")
-            ]
+            exclude: ["Resources"]
         )
     ]
 )
-

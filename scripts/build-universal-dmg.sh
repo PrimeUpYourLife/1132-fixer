@@ -3,17 +3,35 @@ set -euo pipefail
 
 APP_NAME="1132 Fixer"
 EXECUTABLE_NAME="1132 Fixer"
+TARGET_NAME="1132Fixer"
 BUNDLE_ID="com.local.1132fixer"
 MIN_MACOS="13.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION_FILE="$ROOT_DIR/VERSION"
 DIST_DIR="$ROOT_DIR/dist"
 TEMP_BUILD_ROOT="$ROOT_DIR/.build/universal"
 ARM64_BUILD_DIR="$TEMP_BUILD_ROOT/arm64"
 X64_BUILD_DIR="$TEMP_BUILD_ROOT/x86_64"
 UNIVERSAL_DIR="$TEMP_BUILD_ROOT/merged"
 APP_BUNDLE_DIR="$DIST_DIR/$APP_NAME.app"
-DMG_PATH="$DIST_DIR/$APP_NAME-universal.dmg"
+APP_VERSION="${APP_VERSION:-}"
+APP_BUILD="${APP_BUILD:-1}"
+if [[ -z "$APP_VERSION" ]]; then
+  if [[ -f "$VERSION_FILE" ]]; then
+    APP_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+  else
+    echo "Missing VERSION file: $VERSION_FILE" >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$APP_VERSION" ]]; then
+  echo "APP_VERSION is empty. Set APP_VERSION or populate $VERSION_FILE." >&2
+  exit 1
+fi
+
+DMG_PATH="$DIST_DIR/$APP_NAME-v$APP_VERSION-universal.dmg"
 DMG_STAGING_DIR="$TEMP_BUILD_ROOT/dmg-staging"
 
 # Required for distribution: Developer ID Application identity from your keychain.
@@ -46,6 +64,9 @@ swift build -c release --arch x86_64 --scratch-path "$X64_BUILD_DIR"
 ARM64_BIN="$ARM64_BUILD_DIR/release/$EXECUTABLE_NAME"
 X64_BIN="$X64_BUILD_DIR/release/$EXECUTABLE_NAME"
 UNIVERSAL_BIN="$UNIVERSAL_DIR/$EXECUTABLE_NAME"
+ARM64_RELEASE_DIR="$(dirname "$ARM64_BIN")"
+X64_RELEASE_DIR="$(dirname "$X64_BIN")"
+EXPECTED_RESOURCE_BUNDLE="$EXECUTABLE_NAME"_"$TARGET_NAME.bundle"
 
 if [[ ! -f "$ARM64_BIN" ]]; then
   echo "arm64 binary not found: $ARM64_BIN" >&2
@@ -64,6 +85,15 @@ mkdir -p "$APP_BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$APP_BUNDLE_DIR/Contents/Resources"
 cp "$UNIVERSAL_BIN" "$APP_BUNDLE_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 chmod +x "$APP_BUNDLE_DIR/Contents/MacOS/$EXECUTABLE_NAME"
+
+# If SwiftPM generated a resource bundle, copy it into app resources.
+if [[ -d "$ARM64_RELEASE_DIR/$EXPECTED_RESOURCE_BUNDLE" ]]; then
+  if [[ ! -d "$X64_RELEASE_DIR/$EXPECTED_RESOURCE_BUNDLE" ]]; then
+    echo "x86_64 build is missing resource bundle present in arm64 build: $EXPECTED_RESOURCE_BUNDLE" >&2
+    exit 1
+  fi
+  cp -R "$ARM64_RELEASE_DIR/$EXPECTED_RESOURCE_BUNDLE" "$APP_BUNDLE_DIR/Contents/Resources/"
+fi
 
 cat > "$APP_BUNDLE_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,9 +115,9 @@ cat > "$APP_BUNDLE_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$APP_BUILD</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_MACOS</string>
   <key>NSHighResolutionCapable</key>
@@ -99,6 +129,7 @@ PLIST
 # Build a Finder app icon if source PNG exists.
 SOURCE_APP_ICON="$ROOT_DIR/Sources/1132Fixer/Resources/AppIcon.png"
 if [[ -f "$SOURCE_APP_ICON" ]]; then
+  cp "$SOURCE_APP_ICON" "$APP_BUNDLE_DIR/Contents/Resources/AppIcon.png"
   ICONSET_DIR="$TEMP_BUILD_ROOT/AppIcon.iconset"
   mkdir -p "$ICONSET_DIR"
   sips -z 16 16 "$SOURCE_APP_ICON" --out "$ICONSET_DIR/icon_16x16.png" >/dev/null

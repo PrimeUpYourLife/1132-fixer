@@ -8,7 +8,9 @@ struct Fixer1132App: App {
         // Disable automatic tabbing so AppKit does not try to index tabs by bundle identifier.
         NSWindow.allowsAutomaticWindowTabbing = false
 
-        if let iconURL = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+        // Avoid Bundle.module here: if the SwiftPM resource bundle is missing in a packaged app,
+        // Bundle.module can trap during startup and crash the app.
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
            let iconImage = NSImage(contentsOf: iconURL) {
             NSApplication.shared.applicationIconImage = iconImage
         }
