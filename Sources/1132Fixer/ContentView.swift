@@ -6,21 +6,24 @@ import AppKit
 final class AppViewModel: ObservableObject {
     @Published var logs: [String] = []
     @Published var isRunning = false
-    private let resetZoomDataCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null'"#
+    private let resetZoomDataCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true'"#
     private let refreshDNSAppleScript = #"do shell script "dscacheutil -flushcache; killall -HUP mDNSResponder" with administrator privileges"#
     private let launchZoomCommand = #"/bin/bash -c 'open -a "zoom.us"'"#
 
     func startZoom() {
         runTask("Start Zoom") {
             let resetOutput = try self.runProcess(
+                stepName: "Reset Zoom data",
                 executable: "/bin/zsh",
                 arguments: ["-lc", self.resetZoomDataCommand]
             )
             let dnsOutput = try self.runProcess(
+                stepName: "Refresh DNS cache",
                 executable: "/usr/bin/osascript",
                 arguments: ["-e", self.refreshDNSAppleScript]
             )
             let launchOutput = try self.runProcess(
+                stepName: "Launch Zoom",
                 executable: "/bin/zsh",
                 arguments: ["-lc", self.launchZoomCommand]
             )
@@ -69,7 +72,7 @@ final class AppViewModel: ObservableObject {
         logs.append("[\(timestamp)] \(text)")
     }
 
-    private func runProcess(executable: String, arguments: [String]) throws -> String {
+    private func runProcess(stepName: String, executable: String, arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -95,10 +98,20 @@ final class AppViewModel: ObservableObject {
             return combined
         }
 
+        let trimmedOutput = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message: String
+        if !trimmedOutput.isEmpty {
+            message = "\(stepName): \(trimmedOutput)"
+        } else if executable == "/usr/bin/osascript" {
+            message = "\(stepName): Admin authorization was canceled or failed."
+        } else {
+            message = "\(stepName): Command failed with exit code \(process.terminationStatus)."
+        }
+
         throw NSError(
             domain: "1132Fixer",
             code: Int(process.terminationStatus),
-            userInfo: [NSLocalizedDescriptionKey: combined.isEmpty ? "Command failed with exit code \(process.terminationStatus)." : combined]
+            userInfo: [NSLocalizedDescriptionKey: message]
         )
     }
 
