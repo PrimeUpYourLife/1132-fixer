@@ -2,6 +2,10 @@
 
 <img src="Sources/1132Fixer/Resources/AppIcon.png" width="128" alt="1132 Fixer app icon">
 
+![GitHub Release](https://img.shields.io/github/v/release/PrimeUpYourLife/1132-fixer?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-silicone-yellow?logo=apple&style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-intel-blue?logo=apple&style=for-the-badge)
+
+
+
 Minimal macOS app with one button:
 
 - `Start Zoom`: kills Zoom, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
