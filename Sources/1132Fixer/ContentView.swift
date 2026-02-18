@@ -4,6 +4,17 @@ import AppKit
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    private enum Constants {
+        static let errorDomain = "1132Fixer"
+        static let shellPath = "/bin/zsh"
+        static let osascriptPath = "/usr/bin/osascript"
+    }
+
+    private static let logTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        return formatter
+    }()
+
     @Published var logs: [String] = []
     @Published var isRunning = false
     private let resetZoomDataCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true'"#
@@ -14,17 +25,17 @@ final class AppViewModel: ObservableObject {
         runTask("Start Zoom") {
             let resetOutput = try self.runProcess(
                 stepName: "Reset Zoom data",
-                executable: "/bin/zsh",
+                executable: Constants.shellPath,
                 arguments: ["-lc", self.resetZoomDataCommand]
             )
             let dnsOutput = try self.runProcess(
                 stepName: "Refresh DNS cache",
-                executable: "/usr/bin/osascript",
+                executable: Constants.osascriptPath,
                 arguments: ["-e", self.refreshDNSAppleScript]
             )
             let launchOutput = try self.runProcess(
                 stepName: "Launch Zoom",
-                executable: "/bin/zsh",
+                executable: Constants.shellPath,
                 arguments: ["-lc", self.launchZoomCommand]
             )
 
@@ -68,7 +79,7 @@ final class AppViewModel: ObservableObject {
     }
 
     private func appendLog(_ text: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = Self.logTimestampFormatter.string(from: Date())
         logs.append("[\(timestamp)] \(text)")
     }
 
@@ -102,14 +113,14 @@ final class AppViewModel: ObservableObject {
         let message: String
         if !trimmedOutput.isEmpty {
             message = "\(stepName): \(trimmedOutput)"
-        } else if executable == "/usr/bin/osascript" {
+        } else if executable == Constants.osascriptPath {
             message = "\(stepName): Admin authorization was canceled or failed."
         } else {
             message = "\(stepName): Command failed with exit code \(process.terminationStatus)."
         }
 
         throw NSError(
-            domain: "1132Fixer",
+            domain: Constants.errorDomain,
             code: Int(process.terminationStatus),
             userInfo: [NSLocalizedDescriptionKey: message]
         )

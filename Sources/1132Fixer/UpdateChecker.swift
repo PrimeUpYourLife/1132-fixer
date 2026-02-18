@@ -9,12 +9,21 @@ enum UpdateChecker {
     // Keep this aligned with the repository link in ContentView.
     static let owner = "PrimeUpYourLife"
     static let repo = "1132-fixer"
+    static let errorDomain = "1132Fixer.UpdateChecker"
+    private static let userAgent = "1132Fixer"
 
     private struct GitHubRelease: Decodable {
-        let tag_name: String
-        let html_url: String
+        let tagName: String
+        let htmlURL: String
         let draft: Bool?
         let prerelease: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case htmlURL = "html_url"
+            case draft
+            case prerelease
+        }
     }
 
     static func fetchLatestRelease() async throws -> ReleaseInfo {
@@ -23,12 +32,14 @@ enum UpdateChecker {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("1132Fixer", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 10
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw NSError(
-                domain: "1132Fixer.UpdateChecker",
+                domain: errorDomain,
                 code: http.statusCode,
                 userInfo: [NSLocalizedDescriptionKey: "GitHub API returned HTTP \(http.statusCode)."]
             )
@@ -39,16 +50,18 @@ enum UpdateChecker {
         // `/releases/latest` should already exclude drafts/prereleases, but keep a guardrail.
         if decoded.draft == true || decoded.prerelease == true {
             throw NSError(
-                domain: "1132Fixer.UpdateChecker",
+                domain: errorDomain,
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Latest release is not a stable release."]
             )
         }
 
-        let version = normalizeVersion(decoded.tag_name)
-        guard let htmlURL = URL(string: decoded.html_url) else {
+        let version = normalizeVersion(decoded.tagName)
+        guard let htmlURL = URL(string: decoded.htmlURL),
+              htmlURL.scheme == "https",
+              htmlURL.host?.contains("github.com") == true else {
             throw NSError(
-                domain: "1132Fixer.UpdateChecker",
+                domain: errorDomain,
                 code: 2,
                 userInfo: [NSLocalizedDescriptionKey: "Invalid release URL."]
             )
