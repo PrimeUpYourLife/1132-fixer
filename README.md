@@ -1,5 +1,7 @@
 # 1132 Fixer
 
+## [Download the latest release here](https://github.com/PrimeUpYourLife/1132-fixer/releases/latest)
+
 <img src="Sources/1132Fixer/Resources/AppIcon.png" width="128" alt="1132 Fixer app icon">
 
 ![GitHub Release](https://img.shields.io/github/v/release/PrimeUpYourLife/1132-fixer?style=for-the-badge) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/PrimeUpYourLife/1132-fixer/total?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-silicone-yellow?logo=apple&style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-intel-purple?logo=apple&style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-universal-green?logo=apple&style=for-the-badge)
