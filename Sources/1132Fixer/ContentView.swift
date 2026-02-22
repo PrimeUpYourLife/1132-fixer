@@ -6,7 +6,7 @@ import AppKit
 final class AppViewModel: ObservableObject {
     private enum Constants {
         static let errorDomain = "1132Fixer"
-        static let shellPath = "/bin/zsh"
+        static let bashPath = "/bin/bash"
         static let osascriptPath = "/usr/bin/osascript"
     }
 
@@ -17,16 +17,16 @@ final class AppViewModel: ObservableObject {
 
     @Published var logs: [String] = []
     @Published var isRunning = false
-    private let resetZoomDataCommand = #"/bin/bash -c 'killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true'"#
-    private let refreshDNSAppleScript = #"do shell script "dscacheutil -flushcache; killall -HUP mDNSResponder" with administrator privileges"#
-    private let launchZoomCommand = #"/bin/bash -c 'open -a "zoom.us"'"#
+    private let resetZoomDataCommand = #"killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true"#
+    private let refreshDNSAppleScript = #"do shell script "/usr/bin/dscacheutil -flushcache; /usr/bin/killall -HUP mDNSResponder" with administrator privileges"#
+    private let launchZoomCommand = #"open -a "zoom.us""#
 
     func startZoom() {
         runTask("Start Zoom") {
             let resetOutput = try self.runProcess(
                 stepName: "Reset Zoom data",
-                executable: Constants.shellPath,
-                arguments: ["-lc", self.resetZoomDataCommand]
+                executable: Constants.bashPath,
+                arguments: ["-c", self.resetZoomDataCommand]
             )
             let dnsOutput = try self.runProcess(
                 stepName: "Refresh DNS cache",
@@ -35,8 +35,8 @@ final class AppViewModel: ObservableObject {
             )
             let launchOutput = try self.runProcess(
                 stepName: "Launch Zoom",
-                executable: Constants.shellPath,
-                arguments: ["-lc", self.launchZoomCommand]
+                executable: Constants.bashPath,
+                arguments: ["-c", self.launchZoomCommand]
             )
 
             return [resetOutput, dnsOutput, launchOutput]
