@@ -4,6 +4,18 @@ import AppKit
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    private struct NetworkInterfaceInfo {
+        enum Kind: String {
+            case wifi = "Wi-Fi"
+            case ethernet = "Ethernet"
+        }
+
+        let device: String
+        let hardwarePort: String
+        let networkService: String
+        let kind: Kind
+    }
+
     private enum Constants {
         static let errorDomain = "1132Fixer"
         static let bashPath = "/bin/bash"
@@ -23,6 +35,7 @@ final class AppViewModel: ObservableObject {
 
     func startZoom() {
         runTask("Start Zoom") {
+            let macSpoofOutput = try self.spoofMACAndReconnectActiveInterface()
             let resetOutput = try self.runProcess(
                 stepName: "Reset Zoom data",
                 executable: Constants.bashPath,
@@ -39,7 +52,7 @@ final class AppViewModel: ObservableObject {
                 arguments: ["-c", self.launchZoomCommand]
             )
 
-            return [resetOutput, dnsOutput, launchOutput]
+            return [macSpoofOutput, resetOutput, dnsOutput, launchOutput]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
         }
@@ -81,6 +94,207 @@ final class AppViewModel: ObservableObject {
     private func appendLog(_ text: String) {
         let timestamp = Self.logTimestampFormatter.string(from: Date())
         logs.append("[\(timestamp)] \(text)")
+    }
+
+    private func spoofMACAndReconnectActiveInterface() throws -> String {
+        let interface = try resolveActiveSupportedInterface()
+        let spoofedMAC = try generateRandomMACAddress()
+
+        let spoofScript = [
+            "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) off",
+            "/bin/sleep 1",
+            "/sbin/ifconfig \(shellSingleQuote(interface.device)) ether \(shellSingleQuote(spoofedMAC))",
+            "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) on",
+            "/bin/sleep 2"
+        ].joined(separator: " && ")
+
+        let appleScript = appleScriptDoShellScript(spoofScript, administratorPrivileges: true)
+        let commandOutput = try runProcess(
+            stepName: "Spoof MAC and reconnect \(interface.kind.rawValue)",
+            executable: Constants.osascriptPath,
+            arguments: ["-e", appleScript]
+        )
+
+        let summary = "Spoofed MAC on \(interface.kind.rawValue) (\(interface.device), service: \(interface.networkService)) -> \(spoofedMAC)"
+        let trimmedCommandOutput = commandOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedCommandOutput.isEmpty {
+            return summary
+        }
+
+        return "\(summary)\n\(trimmedCommandOutput)"
+    }
+
+    private func resolveActiveSupportedInterface() throws -> NetworkInterfaceInfo {
+        let defaultRouteOutput = try runProcess(
+            stepName: "Detect active network interface",
+            executable: Constants.bashPath,
+            arguments: ["-c", "/sbin/route -n get default"]
+        )
+        let activeDevice = try parseDefaultRouteInterface(from: defaultRouteOutput)
+
+        let hardwarePortsOutput = try runProcess(
+            stepName: "Inspect hardware ports",
+            executable: Constants.bashPath,
+            arguments: ["-c", "/usr/sbin/networksetup -listallhardwareports"]
+        )
+        let hardwarePortMap = parseHardwarePorts(from: hardwarePortsOutput)
+
+        guard let hardwarePortName = hardwarePortMap[activeDevice] else {
+            throw appError("Detect active network interface: Could not map interface '\(activeDevice)' to a hardware port.")
+        }
+
+        let kind = try classifySupportedInterface(hardwarePortName: hardwarePortName)
+
+        let serviceOrderOutput = try runProcess(
+            stepName: "Inspect network services",
+            executable: Constants.bashPath,
+            arguments: ["-c", "/usr/sbin/networksetup -listnetworkserviceorder"]
+        )
+        let serviceMap = parseNetworkServiceOrder(from: serviceOrderOutput)
+
+        guard let networkService = serviceMap[activeDevice], !networkService.isEmpty else {
+            throw appError("Detect active network interface: Could not resolve network service for interface '\(activeDevice)'.")
+        }
+
+        return NetworkInterfaceInfo(
+            device: activeDevice,
+            hardwarePort: hardwarePortName,
+            networkService: networkService,
+            kind: kind
+        )
+    }
+
+    private func parseDefaultRouteInterface(from output: String) throws -> String {
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("interface:") else { continue }
+
+            let value = line.dropFirst("interface:".count).trimmingCharacters(in: .whitespaces)
+            guard isSafeInterfaceName(value) else {
+                throw appError("Detect active network interface: Invalid interface name '\(value)'.")
+            }
+            return value
+        }
+
+        throw appError("Detect active network interface: No default route interface was found. Connect to Wi-Fi or Ethernet and try again.")
+    }
+
+    private func parseHardwarePorts(from output: String) -> [String: String] {
+        var result: [String: String] = [:]
+        var currentHardwarePort: String?
+
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+
+            if line.hasPrefix("Hardware Port:") {
+                currentHardwarePort = String(line.dropFirst("Hardware Port:".count)).trimmingCharacters(in: .whitespaces)
+                continue
+            }
+
+            if line.hasPrefix("Device:"), let hardwarePort = currentHardwarePort {
+                let device = String(line.dropFirst("Device:".count)).trimmingCharacters(in: .whitespaces)
+                if isSafeInterfaceName(device) {
+                    result[device] = hardwarePort
+                }
+            }
+        }
+
+        return result
+    }
+
+    private func classifySupportedInterface(hardwarePortName: String) throws -> NetworkInterfaceInfo.Kind {
+        let normalized = hardwarePortName.lowercased()
+
+        if normalized.contains("wi-fi") || normalized.contains("wifi") {
+            return .wifi
+        }
+        if normalized.contains("ethernet") {
+            return .ethernet
+        }
+
+        throw appError("Detect active network interface: Active interface '\(hardwarePortName)' is not supported. Only Wi-Fi and Ethernet are supported.")
+    }
+
+    private func parseNetworkServiceOrder(from output: String) -> [String: String] {
+        var result: [String: String] = [:]
+        var pendingServiceName: String?
+
+        let pattern = #"\(Hardware Port: .*?, Device: ([^)]+)\)"#
+        let regex = try? NSRegularExpression(pattern: pattern)
+
+        for rawLine in output.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+
+            if line.hasPrefix("("), let closingParen = line.firstIndex(of: ")"), line.index(after: closingParen) < line.endIndex {
+                let nameStart = line.index(after: closingParen)
+                let serviceName = line[nameStart...].trimmingCharacters(in: .whitespaces)
+                if !serviceName.isEmpty && !serviceName.hasPrefix("*") {
+                    pendingServiceName = serviceName
+                } else {
+                    pendingServiceName = nil
+                }
+                continue
+            }
+
+            guard line.hasPrefix("(Hardware Port:"), let serviceName = pendingServiceName, let regex else { continue }
+            let nsLine = line as NSString
+            let range = NSRange(location: 0, length: nsLine.length)
+            guard let match = regex.firstMatch(in: line, options: [], range: range), match.numberOfRanges > 1 else { continue }
+
+            let deviceRange = match.range(at: 1)
+            guard deviceRange.location != NSNotFound else { continue }
+
+            let device = nsLine.substring(with: deviceRange).trimmingCharacters(in: .whitespaces)
+            if isSafeInterfaceName(device) {
+                result[device] = serviceName
+            }
+        }
+
+        return result
+    }
+
+    private func generateRandomMACAddress() throws -> String {
+        var bytes = (0..<6).map { _ in UInt8.random(in: 0...255) }
+        bytes[0] = (bytes[0] | 0x02) & 0xFE // locally administered + unicast
+
+        let mac = bytes.map { String(format: "%02x", $0) }.joined(separator: ":")
+        guard isValidMACAddress(mac) else {
+            throw appError("Generate MAC address: Failed to generate a valid MAC address.")
+        }
+
+        return mac
+    }
+
+    private func isValidMACAddress(_ value: String) -> Bool {
+        let pattern = #"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$"#
+        return value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private func isSafeInterfaceName(_ value: String) -> Bool {
+        let pattern = #"^[a-zA-Z0-9]+$"#
+        return value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    private func shellSingleQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: #"'\"'\"'"#) + "'"
+    }
+
+    private func appleScriptDoShellScript(_ command: String, administratorPrivileges: Bool) -> String {
+        let escapedCommand = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let privilegeClause = administratorPrivileges ? " with administrator privileges" : ""
+        return "do shell script \"\(escapedCommand)\"\(privilegeClause)"
+    }
+
+    private func appError(_ message: String) -> NSError {
+        NSError(
+            domain: Constants.errorDomain,
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
     }
 
     private func runProcess(stepName: String, executable: String, arguments: [String]) throws -> String {
@@ -155,7 +369,7 @@ struct ContentView: View {
                 HStack(spacing: 14) {
                     ActionCard(
                         title: "Start Zoom",
-                        subtitle: "Resets Zoom local data and caches, refreshes DNS cache, then launches Zoom.",
+                        subtitle: "Spoofs MAC on active Wi-Fi/Ethernet and reconnects it, then resets Zoom data, refreshes DNS cache, and launches Zoom.",
                         systemImage: "video.circle.fill",
                         tint: Color(red: 0.13, green: 0.50, blue: 0.86),
                         isDisabled: vm.isRunning,
