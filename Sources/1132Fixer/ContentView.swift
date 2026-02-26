@@ -30,6 +30,19 @@ final class AppViewModel: ObservableObject {
     @Published var logs: [String] = []
     @Published var isRunning = false
     private let resetZoomDataCommand = #"killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true"#
+    private let stopZoomUpdatersCommand = #"""
+for proc in zAutoUpdate zPTUpdaterUI ZoomUpdater; do
+  /usr/bin/pkill -x "$proc" 2>/dev/null || true
+done
+
+for domain in gui/"$(/usr/bin/id -u)" user; do
+  for label in us.zoom.zAutoUpdate us.zoom.ZoomUpdater us.zoom.zPTUpdaterUI; do
+    /bin/launchctl bootout "$domain" "/Library/LaunchAgents/$label.plist" 2>/dev/null || true
+    /bin/launchctl bootout "$domain" "$HOME/Library/LaunchAgents/$label.plist" 2>/dev/null || true
+    /bin/launchctl disable "$domain/$label" 2>/dev/null || true
+  done
+done
+"""#
     private let refreshDNSAppleScript = #"do shell script "/usr/bin/dscacheutil -flushcache; /usr/bin/killall -HUP mDNSResponder" with administrator privileges"#
     private let launchZoomCommand = #"open -a "zoom.us""#
 
@@ -46,13 +59,18 @@ final class AppViewModel: ObservableObject {
                 executable: Constants.osascriptPath,
                 arguments: ["-e", self.refreshDNSAppleScript]
             )
+            let stopUpdatersOutput = try self.runProcess(
+                stepName: "Stop Zoom updaters",
+                executable: Constants.bashPath,
+                arguments: ["-c", self.stopZoomUpdatersCommand]
+            )
             let launchOutput = try self.runProcess(
                 stepName: "Launch Zoom",
                 executable: Constants.bashPath,
                 arguments: ["-c", self.launchZoomCommand]
             )
 
-            return [macSpoofOutput, resetOutput, dnsOutput, launchOutput]
+            return [macSpoofOutput, resetOutput, dnsOutput, stopUpdatersOutput, launchOutput]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
         }

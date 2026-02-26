@@ -95,10 +95,13 @@ block_zoom_updater_files() {
     [[ -n "$path" ]] || continue
     found_any=1
     mode="$(stat -f '%Lp' "$path")"
-    BLOCKED_FILES+=("$path")
-    BLOCKED_FILE_MODES+=("$mode")
-    chmod 000 "$path"
-    echo "   blocked: $path"
+    if chmod 000 "$path" 2>/dev/null; then
+      BLOCKED_FILES+=("$path")
+      BLOCKED_FILE_MODES+=("$mode")
+      echo "   blocked: $path"
+    else
+      echo "   warning: could not block (permission denied): $path"
+    fi
   done < <(
     for name in "${BLOCKED_ZOOM_BINARIES[@]}"; do
       find "$zoom_app" -type f -name "$name" 2>/dev/null
