@@ -4,6 +4,12 @@ import AppKit
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    struct BugReportDraft {
+        let apiTitle: String
+        let apiBody: String
+        let fallbackURL: URL
+    }
+
     private struct NetworkInterfaceInfo {
         enum Kind: String {
             case wifi = "Wi-Fi"
@@ -22,8 +28,32 @@ final class AppViewModel: ObservableObject {
         static let osascriptPath = "/usr/bin/osascript"
     }
 
+    private final class LockedDataBuffer {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            data.append(chunk)
+            lock.unlock()
+        }
+
+        func snapshot() -> Data {
+            lock.lock()
+            let copy = data
+            lock.unlock()
+            return copy
+        }
+    }
+
     private static let logTimestampFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
+        return formatter
+    }()
+    private static let bugTitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
         return formatter
     }()
 
@@ -48,23 +78,28 @@ done
 
     func startZoom() {
         runTask("Start Zoom") {
-            let macSpoofOutput = try self.spoofMACAndReconnectActiveInterface()
-            let resetOutput = try self.runProcess(
+            self.appendLog("Step: Spoof MAC and reconnect active network (admin prompt expected)")
+            let macSpoofOutput = try await self.spoofMACAndReconnectActiveInterface()
+            self.appendLog("Step: Reset Zoom data")
+            let resetOutput = try await self.runProcess(
                 stepName: "Reset Zoom data",
                 executable: Constants.bashPath,
                 arguments: ["-c", self.resetZoomDataCommand]
             )
-            let dnsOutput = try self.runProcess(
+            self.appendLog("Step: Refresh DNS cache (admin prompt may appear)")
+            let dnsOutput = try await self.runProcess(
                 stepName: "Refresh DNS cache",
                 executable: Constants.osascriptPath,
                 arguments: ["-e", self.refreshDNSAppleScript]
             )
-            let stopUpdatersOutput = try self.runProcess(
+            self.appendLog("Step: Stop Zoom updaters")
+            let stopUpdatersOutput = try await self.runProcess(
                 stepName: "Stop Zoom updaters",
                 executable: Constants.bashPath,
                 arguments: ["-c", self.stopZoomUpdatersCommand]
             )
-            let launchOutput = try self.runProcess(
+            self.appendLog("Step: Launch Zoom")
+            let launchOutput = try await self.runProcess(
                 stepName: "Launch Zoom",
                 executable: Constants.bashPath,
                 arguments: ["-c", self.launchZoomCommand]
@@ -80,10 +115,46 @@ done
         logs.removeAll()
     }
 
+    func logMessage(_ text: String) {
+        appendLog(text)
+    }
+
+    func makeBugReportDraft(appVersion: String, maxLogLines: Int = 200) -> BugReportDraft {
+        let now = Date()
+        let title = "Bug Report \(Self.bugTitleFormatter.string(from: now))"
+        let timestamp = Self.logTimestampFormatter.string(from: now)
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+        let architecture = machineArchitecture()
+        let lastStatus = inferLastActionStatus()
+        let recentLogs = Array(logs.suffix(maxLogLines))
+        let logsBlock = recentLogs.isEmpty ? "No logs captured." : recentLogs.joined(separator: "\n")
+        let body = """
+## Summary
+Auto-generated bug report from 1132 Fixer.
+
+## System Info (Auto-attached)
+- App version: \(appVersion)
+- OS: \(osVersion)
+- Architecture: \(architecture)
+- Timestamp: \(timestamp)
+- Last action status: \(lastStatus)
+
+## Recent Logs
+```text
+\(logsBlock)
+```
+
+## Notes
+This report was generated without user narrative input.
+"""
+        let fallbackURL = makeFallbackIssueURL(title: title, body: body)
+        return BugReportDraft(apiTitle: title, apiBody: body, fallbackURL: fallbackURL)
+    }
+
     private func runTask(
         _ title: String,
         onSuccess: (() -> Void)? = nil,
-        action: @escaping () throws -> String
+        action: @escaping () async throws -> String
     ) {
         guard !isRunning else {
             appendLog("Another task is already running.")
@@ -96,7 +167,7 @@ done
         Task {
             defer { isRunning = false }
             do {
-                let output = try action()
+                let output = try await action()
                 if output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     appendLog("Done.")
                 } else {
@@ -114,21 +185,60 @@ done
         logs.append("[\(timestamp)] \(text)")
     }
 
-    private func spoofMACAndReconnectActiveInterface() throws -> String {
-        let interface = try resolveActiveSupportedInterface()
+    private func inferLastActionStatus() -> String {
+        for line in logs.reversed() {
+            if line.contains("Error:") {
+                return "Error"
+            }
+            if line.contains("Done.") {
+                return "Completed"
+            }
+            if line.contains("=== Start Zoom ===") {
+                return "In Progress"
+            }
+        }
+        return "Unknown"
+    }
+
+    private func machineArchitecture() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let mirror = Mirror(reflecting: systemInfo.machine)
+        let values = mirror.children.compactMap { child -> UInt8? in
+            guard let value = child.value as? Int8, value != 0 else { return nil }
+            return UInt8(value)
+        }
+        return String(bytes: values, encoding: .ascii) ?? "unknown"
+    }
+
+    private func makeFallbackIssueURL(title: String, body: String) -> URL {
+        var components = URLComponents(string: "https://github.com/\(BugReportService.owner)/\(BugReportService.repo)/issues/new")!
+        components.queryItems = [
+            URLQueryItem(name: "title", value: title),
+            URLQueryItem(name: "body", value: body)
+        ]
+        return components.url ?? URL(string: "https://github.com/\(BugReportService.owner)/\(BugReportService.repo)/issues/new")!
+    }
+
+    private func spoofMACAndReconnectActiveInterface() async throws -> String {
+        let interface = try await resolveActiveSupportedInterface()
         let spoofedMAC = try generateRandomMACAddress()
 
-        let spoofScript = [
-            "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) off",
-            "/bin/sleep 1",
-            // macOS Sequoia can reject `ether` here; prefer `lladdr` and keep `ether` as fallback for older systems.
-            "(/sbin/ifconfig \(shellSingleQuote(interface.device)) lladdr \(shellSingleQuote(spoofedMAC)) || /sbin/ifconfig \(shellSingleQuote(interface.device)) ether \(shellSingleQuote(spoofedMAC)))",
-            "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) on",
-            "/bin/sleep 2"
-        ].joined(separator: " && ")
+        let setMACCommand = "(/sbin/ifconfig \(shellSingleQuote(interface.device)) lladdr \(shellSingleQuote(spoofedMAC)) || /sbin/ifconfig \(shellSingleQuote(interface.device)) ether \(shellSingleQuote(spoofedMAC)))"
+        let interfaceDownCommand = "/sbin/ifconfig \(shellSingleQuote(interface.device)) down"
+        let interfaceUpCommand = "/sbin/ifconfig \(shellSingleQuote(interface.device)) up"
+        let disableServiceCommand = "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) off"
+        let enableServiceCommand = "/usr/sbin/networksetup -setnetworkserviceenabled \(shellSingleQuote(interface.networkService)) on"
+        let sleepShort = "/bin/sleep 1"
+        let sleepReconnect = "/bin/sleep 2"
+
+        // Keep the interface administratively down only while changing MAC, then reconnect service.
+        let primarySequence = [interfaceDownCommand, sleepShort, setMACCommand, interfaceUpCommand, sleepShort, disableServiceCommand, sleepShort, enableServiceCommand, sleepReconnect]
+        let fallbackSequence = [setMACCommand, disableServiceCommand, sleepShort, enableServiceCommand, sleepReconnect]
+        let spoofScript = "(\(primarySequence.joined(separator: " && "))) || (\(fallbackSequence.joined(separator: " && ")))"
 
         let appleScript = appleScriptDoShellScript(spoofScript, administratorPrivileges: true)
-        let commandOutput = try runProcess(
+        let commandOutput = try await runProcess(
             stepName: "Spoof MAC and reconnect \(interface.kind.rawValue)",
             executable: Constants.osascriptPath,
             arguments: ["-e", appleScript]
@@ -144,15 +254,15 @@ done
         return "\(summary)\n\(trimmedCommandOutput)"
     }
 
-    private func resolveActiveSupportedInterface() throws -> NetworkInterfaceInfo {
-        let defaultRouteOutput = try runProcess(
+    private func resolveActiveSupportedInterface() async throws -> NetworkInterfaceInfo {
+        let defaultRouteOutput = try await runProcess(
             stepName: "Detect active network interface",
             executable: Constants.bashPath,
             arguments: ["-c", "/sbin/route -n get default"]
         )
         let activeDevice = try parseDefaultRouteInterface(from: defaultRouteOutput)
 
-        let hardwarePortsOutput = try runProcess(
+        let hardwarePortsOutput = try await runProcess(
             stepName: "Inspect hardware ports",
             executable: Constants.bashPath,
             arguments: ["-c", "/usr/sbin/networksetup -listallhardwareports"]
@@ -165,7 +275,7 @@ done
 
         let kind = try classifySupportedInterface(hardwarePortName: hardwarePortName)
 
-        let serviceOrderOutput = try runProcess(
+        let serviceOrderOutput = try await runProcess(
             stepName: "Inspect network services",
             executable: Constants.bashPath,
             arguments: ["-c", "/usr/sbin/networksetup -listnetworkserviceorder"]
@@ -316,7 +426,7 @@ done
         )
     }
 
-    private func runProcess(stepName: String, executable: String, arguments: [String]) throws -> String {
+    private func runProcess(stepName: String, executable: String, arguments: [String]) async throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -326,37 +436,63 @@ done
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        try process.run()
-        process.waitUntilExit()
+        return try await withCheckedThrowingContinuation { continuation in
+            let stdoutBuffer = LockedDataBuffer()
+            let stderrBuffer = LockedDataBuffer()
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            outPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stdoutBuffer.append(chunk)
+            }
 
-        let stdout = String(data: outData, encoding: .utf8) ?? ""
-        let stderr = String(data: errData, encoding: .utf8) ?? ""
-        let combined = [stdout, stderr]
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+            errPipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                guard !chunk.isEmpty else { return }
+                stderrBuffer.append(chunk)
+            }
 
-        if process.terminationStatus == 0 {
-            return combined
+            do {
+                process.terminationHandler = { terminatedProcess in
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+
+                    let outData = stdoutBuffer.snapshot()
+                    let errData = stderrBuffer.snapshot()
+
+                    let stdout = String(data: outData, encoding: .utf8) ?? ""
+                    let stderr = String(data: errData, encoding: .utf8) ?? ""
+                    let combined = [stdout, stderr]
+                        .filter { !$0.isEmpty }
+                        .joined(separator: "\n")
+
+                    if terminatedProcess.terminationStatus == 0 {
+                        continuation.resume(returning: combined)
+                        return
+                    }
+
+                    let trimmedOutput = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let message: String
+                    if !trimmedOutput.isEmpty {
+                        message = "\(stepName): \(trimmedOutput)"
+                    } else if executable == Constants.osascriptPath {
+                        message = "\(stepName): Admin authorization was canceled or failed."
+                    } else {
+                        message = "\(stepName): Command failed with exit code \(terminatedProcess.terminationStatus)."
+                    }
+
+                    continuation.resume(throwing: NSError(
+                        domain: Constants.errorDomain,
+                        code: Int(terminatedProcess.terminationStatus),
+                        userInfo: [NSLocalizedDescriptionKey: message]
+                    ))
+                }
+
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
-
-        let trimmedOutput = combined.trimmingCharacters(in: .whitespacesAndNewlines)
-        let message: String
-        if !trimmedOutput.isEmpty {
-            message = "\(stepName): \(trimmedOutput)"
-        } else if executable == Constants.osascriptPath {
-            message = "\(stepName): Admin authorization was canceled or failed."
-        } else {
-            message = "\(stepName): Command failed with exit code \(process.terminationStatus)."
-        }
-
-        throw NSError(
-            domain: Constants.errorDomain,
-            code: Int(process.terminationStatus),
-            userInfo: [NSLocalizedDescriptionKey: message]
-        )
     }
 
 }
@@ -368,6 +504,7 @@ struct ContentView: View {
 
     @State private var updateAlertIsPresented = false
     @State private var latestRelease: ReleaseInfo?
+    @State private var isReportingBug = false
 
     var body: some View {
         ZStack {
@@ -393,6 +530,19 @@ struct ContentView: View {
                         tint: Color(red: 0.13, green: 0.50, blue: 0.86),
                         isDisabled: vm.isRunning,
                         action: vm.startZoom
+                    )
+
+                    ActionCard(
+                        title: "Report a Bug",
+                        subtitle: "Creates a GitHub issue with auto-attached system info and the latest 200 log lines.",
+                        systemImage: "ladybug.fill",
+                        tint: Color(red: 0.95, green: 0.64, blue: 0.18),
+                        isDisabled: isReportingBug,
+                        action: {
+                            Task {
+                                await reportBug()
+                            }
+                        }
                     )
                 }
 
@@ -429,6 +579,26 @@ struct ContentView: View {
             } else {
                 Text("A newer version is available.")
             }
+        }
+    }
+
+    @MainActor
+    private func reportBug() async {
+        guard !isReportingBug else { return }
+        isReportingBug = true
+        defer { isReportingBug = false }
+
+        vm.logMessage("=== Report a Bug ===")
+        let draft = vm.makeBugReportDraft(appVersion: appVersion)
+
+        do {
+            let result = try await BugReportService.createIssue(title: draft.apiTitle, body: draft.apiBody)
+            vm.logMessage("Bug report created: #\(result.number) \(result.issueURL.absoluteString)")
+            NSWorkspace.shared.open(result.issueURL)
+        } catch {
+            vm.logMessage("Bug report API failed: \(error.localizedDescription)")
+            vm.logMessage("Opening browser fallback issue form.")
+            NSWorkspace.shared.open(draft.fallbackURL)
         }
     }
 }

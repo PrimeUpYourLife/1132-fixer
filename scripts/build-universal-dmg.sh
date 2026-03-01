@@ -59,60 +59,6 @@ APPLE_API_ISSUER_ID="${APPLE_API_ISSUER_ID:-}"
 APPLE_API_PRIVATE_KEY="${APPLE_API_PRIVATE_KEY:-}"
 APPLE_API_KEY_PATH="${APPLE_API_KEY_PATH:-}"
 
-BLOCKED_ZOOM_BINARIES=(
-  "zAutoUpdate"
-  "zPTUpdaterUI"
-  "ZoomUpdater"
-)
-BLOCKED_FILES=()
-BLOCKED_FILE_MODES=()
-
-restore_blocked_files() {
-  local i
-  for (( i=0; i<${#BLOCKED_FILES[@]}; i++ )); do
-    if [[ -e "${BLOCKED_FILES[$i]}" ]]; then
-      chmod "${BLOCKED_FILE_MODES[$i]}" "${BLOCKED_FILES[$i]}" || true
-    fi
-  done
-}
-
-trap restore_blocked_files EXIT
-
-block_zoom_updater_files() {
-  local zoom_app="/Applications/zoom.us.app"
-  local name
-  local path
-  local mode
-  local found_any=0
-
-  if [[ ! -d "$zoom_app" ]]; then
-    echo "==> Zoom app not found at $zoom_app; skipping updater file blocking"
-    return
-  fi
-
-  echo "==> Blocking Zoom updater files during build"
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    found_any=1
-    mode="$(stat -f '%Lp' "$path")"
-    if chmod 000 "$path" 2>/dev/null; then
-      BLOCKED_FILES+=("$path")
-      BLOCKED_FILE_MODES+=("$mode")
-      echo "   blocked: $path"
-    else
-      echo "   warning: could not block (permission denied): $path"
-    fi
-  done < <(
-    for name in "${BLOCKED_ZOOM_BINARIES[@]}"; do
-      find "$zoom_app" -type f -name "$name" 2>/dev/null
-    done
-  )
-
-  if [[ "$found_any" == "0" ]]; then
-    echo "   no matching updater files found"
-  fi
-}
-
 if [[ -z "$SIGN_IDENTITY" ]]; then
   echo "Missing SIGN_IDENTITY. Example:" >&2
   echo "  SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' $0" >&2
@@ -121,8 +67,6 @@ fi
 
 rm -rf "$DIST_DIR" "$TEMP_BUILD_ROOT"
 mkdir -p "$DIST_DIR" "$UNIVERSAL_DIR"
-
-block_zoom_updater_files
 
 echo "==> Building arm64 release binary"
 swift build -c release --arch arm64 --scratch-path "$ARM64_BUILD_DIR"

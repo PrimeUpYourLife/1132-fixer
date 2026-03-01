@@ -7,17 +7,25 @@
 ![GitHub Release](https://img.shields.io/github/v/release/PrimeUpYourLife/1132-fixer?style=for-the-badge) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/PrimeUpYourLife/1132-fixer/total?style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-silicone-yellow?logo=apple&style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-intel-purple?logo=apple&style=for-the-badge) ![Static Badge](https://img.shields.io/badge/mac-universal-green?logo=apple&style=for-the-badge)
 
 
-Minimal macOS app with one action:
+Minimal macOS app with two actions:
 
 - `Start Zoom`: spoofs a random MAC address on the active Wi-Fi/Ethernet interface, automatically disconnects/reconnects that network service, kills Zoom, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
+- `Report a Bug`: creates a GitHub issue in `PrimeUpYourLife/1132-fixer` with auto-attached diagnostics (app version, OS, architecture, timestamp, and the latest 200 log lines)
 
 The app runs local recovery commands for Error 1132 and performs network interface MAC spoofing/reconnect plus DNS cache reset via AppleScript (`do shell script ... with administrator privileges`) so macOS can present native admin-password prompts.
 
 Recent compatibility update: MAC address changes now try `ifconfig ... lladdr ...` first and fall back to `ifconfig ... ether ...` to avoid failures seen on newer macOS versions (including Sequoia).
+Current reconnect flow applies the MAC change before toggling the network service off/on to avoid `ifconfig ... Network is down` failures reported on some Ethernet setups.
+Current reconnect flow brings the interface down, applies the MAC, brings it back up, then toggles the network service off/on; if that fails, it falls back to a direct MAC-change + reconnect order for compatibility.
 
 ## Updates
 
 On launch, the app checks the GitHub Releases `latest` endpoint and prompts if a newer version is available.
+
+## Bug Reporting
+
+`Report a Bug` uses the GitHub API when `FIXER_GITHUB_TOKEN` is set in the runtime environment.
+If token is missing or API submission fails, the app logs the error and opens a prefilled GitHub issue form in the browser as fallback.
 
 ## License and Risk
 
