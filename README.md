@@ -10,7 +10,7 @@
 Minimal macOS app with two actions:
 
 - `Start Zoom`: spoofs a random MAC address on the active Wi-Fi/Ethernet interface, automatically disconnects/reconnects that network service, kills Zoom, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
-- `Report a Bug`: creates a GitHub issue in `PrimeUpYourLife/1132-fixer` with auto-attached diagnostics (app version, OS, architecture, timestamp, and the latest 200 log lines)
+- `Report a Bug`: opens a small form for optional email + message, then sends diagnostics (app version, OS, architecture, timestamp, and the latest 200 log lines) to the bug report API
 
 The app runs local recovery commands for Error 1132 and performs network interface MAC spoofing/reconnect plus DNS cache reset via AppleScript (`do shell script ... with administrator privileges`) so macOS can present native admin-password prompts.
 
@@ -24,8 +24,29 @@ On launch, the app checks the GitHub Releases `latest` endpoint and prompts if a
 
 ## Bug Reporting
 
-`Report a Bug` uses the GitHub API when `FIXER_GITHUB_TOKEN` is set in the runtime environment.
-If token is missing or API submission fails, the app logs the error and opens a prefilled GitHub issue form in the browser as fallback.
+`Report a Bug` sends a POST request to:
+- `https://1132-bug-report-production.up.railway.app/api/bug-report`
+
+Payload fields:
+- `Title`
+- `Email` (optional)
+- `Message`
+- `System Info`
+- `Recent Logs`
+
+If API submission fails, the app logs the error in the Activity Log.
+
+Configuration variables are loaded from runtime env first, then bundled resource files:
+- `FIXER_BUG_REPORT_ENDPOINT`
+- `FIXER_BUG_REPORT_TOKEN`
+
+For local run:
+
+```bash
+FIXER_BUG_REPORT_ENDPOINT=https://1132-bug-report-production.up.railway.app/api/bug-report \
+FIXER_BUG_REPORT_TOKEN=your_token_here \
+swift run
+```
 
 ## License and Risk
 

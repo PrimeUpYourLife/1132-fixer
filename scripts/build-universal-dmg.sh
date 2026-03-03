@@ -9,6 +9,8 @@ BUNDLE_ID="com.local.1132fixer"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION_FILE="$ROOT_DIR/VERSION"
 MIN_MACOS_FILE="$ROOT_DIR/MIN_MACOS_VERSION"
+BUG_REPORT_ENDPOINT_RESOURCE_FILE="$ROOT_DIR/Sources/1132Fixer/Resources/FIXER_BUG_REPORT_ENDPOINT"
+BUG_REPORT_TOKEN_RESOURCE_FILE="$ROOT_DIR/Sources/1132Fixer/Resources/FIXER_BUG_REPORT_TOKEN"
 DIST_DIR="$ROOT_DIR/dist"
 TEMP_BUILD_ROOT="$ROOT_DIR/.build/universal"
 ARM64_BUILD_DIR="$TEMP_BUILD_ROOT/arm64"
@@ -17,6 +19,8 @@ UNIVERSAL_DIR="$TEMP_BUILD_ROOT/merged"
 APP_BUNDLE_DIR="$DIST_DIR/$APP_NAME.app"
 APP_VERSION="${APP_VERSION:-}"
 APP_BUILD="${APP_BUILD:-1}"
+FIXER_BUG_REPORT_ENDPOINT="${FIXER_BUG_REPORT_ENDPOINT:-}"
+FIXER_BUG_REPORT_TOKEN="${FIXER_BUG_REPORT_TOKEN:-}"
 # Determine minimum macOS version from environment or config file to avoid
 # duplicating the value defined elsewhere (e.g., in Package.swift).
 MIN_MACOS="${MIN_MACOS:-}"
@@ -63,6 +67,40 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
   echo "Missing SIGN_IDENTITY. Example:" >&2
   echo "  SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' $0" >&2
   exit 1
+fi
+
+BUG_REPORT_ENDPOINT_BACKUP_FILE=""
+BUG_REPORT_TOKEN_BACKUP_FILE=""
+cleanup_bug_report_resources() {
+  if [[ -n "$BUG_REPORT_ENDPOINT_BACKUP_FILE" && -f "$BUG_REPORT_ENDPOINT_BACKUP_FILE" ]]; then
+    cp "$BUG_REPORT_ENDPOINT_BACKUP_FILE" "$BUG_REPORT_ENDPOINT_RESOURCE_FILE"
+    rm -f "$BUG_REPORT_ENDPOINT_BACKUP_FILE"
+  fi
+  if [[ -n "$BUG_REPORT_TOKEN_BACKUP_FILE" && -f "$BUG_REPORT_TOKEN_BACKUP_FILE" ]]; then
+    cp "$BUG_REPORT_TOKEN_BACKUP_FILE" "$BUG_REPORT_TOKEN_RESOURCE_FILE"
+    rm -f "$BUG_REPORT_TOKEN_BACKUP_FILE"
+  fi
+}
+trap cleanup_bug_report_resources EXIT
+
+if [[ -f "$BUG_REPORT_ENDPOINT_RESOURCE_FILE" ]]; then
+  BUG_REPORT_ENDPOINT_BACKUP_FILE="$(mktemp -t fixer-bug-report-endpoint-backup.XXXXXX)"
+  cp "$BUG_REPORT_ENDPOINT_RESOURCE_FILE" "$BUG_REPORT_ENDPOINT_BACKUP_FILE"
+fi
+
+if [[ -f "$BUG_REPORT_TOKEN_RESOURCE_FILE" ]]; then
+  BUG_REPORT_TOKEN_BACKUP_FILE="$(mktemp -t fixer-bug-report-token-backup.XXXXXX)"
+  cp "$BUG_REPORT_TOKEN_RESOURCE_FILE" "$BUG_REPORT_TOKEN_BACKUP_FILE"
+fi
+
+if [[ -n "$FIXER_BUG_REPORT_ENDPOINT" ]]; then
+  echo "==> Embedding FIXER_BUG_REPORT_ENDPOINT into app resources for this build"
+  printf '%s\n' "$FIXER_BUG_REPORT_ENDPOINT" > "$BUG_REPORT_ENDPOINT_RESOURCE_FILE"
+fi
+
+if [[ -n "$FIXER_BUG_REPORT_TOKEN" ]]; then
+  echo "==> Embedding FIXER_BUG_REPORT_TOKEN into app resources for this build"
+  printf '%s\n' "$FIXER_BUG_REPORT_TOKEN" > "$BUG_REPORT_TOKEN_RESOURCE_FILE"
 fi
 
 rm -rf "$DIST_DIR" "$TEMP_BUILD_ROOT"

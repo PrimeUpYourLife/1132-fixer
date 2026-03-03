@@ -63,3 +63,5 @@ fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
 .DS_Store
+Sources/1132Fixer/Resources/FIXER_BUG_REPORT_ENDPOINT
+Sources/1132Fixer/Resources/FIXER_BUG_REPORT_TOKEN

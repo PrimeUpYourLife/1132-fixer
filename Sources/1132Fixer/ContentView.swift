@@ -5,9 +5,9 @@ import AppKit
 @MainActor
 final class AppViewModel: ObservableObject {
     struct BugReportDraft {
-        let apiTitle: String
-        let apiBody: String
-        let fallbackURL: URL
+        let title: String
+        let systemInfo: String
+        let recentLogs: String
     }
 
     private struct NetworkInterfaceInfo {
@@ -128,27 +128,14 @@ done
         let lastStatus = inferLastActionStatus()
         let recentLogs = Array(logs.suffix(maxLogLines))
         let logsBlock = recentLogs.isEmpty ? "No logs captured." : recentLogs.joined(separator: "\n")
-        let body = """
-## Summary
-Auto-generated bug report from 1132 Fixer.
-
-## System Info (Auto-attached)
-- App version: \(appVersion)
-- OS: \(osVersion)
-- Architecture: \(architecture)
-- Timestamp: \(timestamp)
-- Last action status: \(lastStatus)
-
-## Recent Logs
-```text
-\(logsBlock)
-```
-
-## Notes
-This report was generated without user narrative input.
+        let systemInfo = """
+App version: \(appVersion)
+OS: \(osVersion)
+Architecture: \(architecture)
+Timestamp: \(timestamp)
+Last action status: \(lastStatus)
 """
-        let fallbackURL = makeFallbackIssueURL(title: title, body: body)
-        return BugReportDraft(apiTitle: title, apiBody: body, fallbackURL: fallbackURL)
+        return BugReportDraft(title: title, systemInfo: systemInfo, recentLogs: logsBlock)
     }
 
     private func runTask(
@@ -209,15 +196,6 @@ This report was generated without user narrative input.
             return UInt8(value)
         }
         return String(bytes: values, encoding: .ascii) ?? "unknown"
-    }
-
-    private func makeFallbackIssueURL(title: String, body: String) -> URL {
-        var components = URLComponents(string: "https://github.com/\(BugReportService.owner)/\(BugReportService.repo)/issues/new")!
-        components.queryItems = [
-            URLQueryItem(name: "title", value: title),
-            URLQueryItem(name: "body", value: body)
-        ]
-        return components.url ?? URL(string: "https://github.com/\(BugReportService.owner)/\(BugReportService.repo)/issues/new")!
     }
 
     private func spoofMACAndReconnectActiveInterface() async throws -> String {
@@ -505,6 +483,9 @@ struct ContentView: View {
     @State private var updateAlertIsPresented = false
     @State private var latestRelease: ReleaseInfo?
     @State private var isReportingBug = false
+    @State private var showBugReportForm = false
+    @State private var bugReportEmail = ""
+    @State private var bugReportMessage = ""
 
     var body: some View {
         ZStack {
@@ -520,6 +501,13 @@ struct ContentView: View {
             .ignoresSafeArea()
 
             VStack(spacing: 18) {
+                HStack {
+                    Spacer()
+                    BugReportButton(isDisabled: isReportingBug) {
+                        showBugReportForm = true
+                    }
+                }
+
                 HeaderCard(isRunning: vm.isRunning, repositoryURL: repositoryURL, appVersion: appVersion)
 
                 HStack(spacing: 14) {
@@ -530,19 +518,6 @@ struct ContentView: View {
                         tint: Color(red: 0.13, green: 0.50, blue: 0.86),
                         isDisabled: vm.isRunning,
                         action: vm.startZoom
-                    )
-
-                    ActionCard(
-                        title: "Report a Bug",
-                        subtitle: "Creates a GitHub issue with auto-attached system info and the latest 200 log lines.",
-                        systemImage: "ladybug.fill",
-                        tint: Color(red: 0.95, green: 0.64, blue: 0.18),
-                        isDisabled: isReportingBug,
-                        action: {
-                            Task {
-                                await reportBug()
-                            }
-                        }
                     )
                 }
 
@@ -580,26 +555,122 @@ struct ContentView: View {
                 Text("A newer version is available.")
             }
         }
+        .sheet(isPresented: $showBugReportForm) {
+            BugReportFormSheet(
+                email: $bugReportEmail,
+                message: $bugReportMessage,
+                isSubmitting: isReportingBug,
+                onCancel: { showBugReportForm = false },
+                onSubmit: {
+                    Task {
+                        await reportBug(email: bugReportEmail, message: bugReportMessage)
+                    }
+                }
+            )
+        }
     }
 
     @MainActor
-    private func reportBug() async {
+    private func reportBug(email: String, message: String) async {
         guard !isReportingBug else { return }
         isReportingBug = true
         defer { isReportingBug = false }
 
         vm.logMessage("=== Report a Bug ===")
         let draft = vm.makeBugReportDraft(appVersion: appVersion)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            let result = try await BugReportService.createIssue(title: draft.apiTitle, body: draft.apiBody)
-            vm.logMessage("Bug report created: #\(result.number) \(result.issueURL.absoluteString)")
-            NSWorkspace.shared.open(result.issueURL)
+            try await BugReportService.sendBugReport(
+                title: draft.title,
+                email: trimmedEmail.isEmpty ? nil : trimmedEmail,
+                message: trimmedMessage,
+                systemInfo: draft.systemInfo,
+                recentLogs: draft.recentLogs
+            )
+            vm.logMessage("Bug report submitted successfully.")
+            showBugReportForm = false
+            bugReportEmail = ""
+            bugReportMessage = ""
         } catch {
-            vm.logMessage("Bug report API failed: \(error.localizedDescription)")
-            vm.logMessage("Opening browser fallback issue form.")
-            NSWorkspace.shared.open(draft.fallbackURL)
+            vm.logMessage("Bug report failed: \(error.localizedDescription)")
         }
+    }
+}
+
+private struct BugReportButton: View {
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Report a bug", systemImage: "ladybug.fill")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .background(Color.black.opacity(0.24), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color(red: 0.95, green: 0.64, blue: 0.18).opacity(0.65), lineWidth: 1)
+                )
+                .opacity(isDisabled ? 0.58 : 1.0)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+    }
+}
+
+private struct BugReportFormSheet: View {
+    @Binding var email: String
+    @Binding var message: String
+    let isSubmitting: Bool
+    let onCancel: () -> Void
+    let onSubmit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Report a bug")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+
+            Text("Add an optional email and a message.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Email (optional)")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                TextField("user@example.com", text: $email)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(isSubmitting)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Message")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                TextEditor(text: $message)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .frame(minHeight: 120)
+                    .padding(6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.08))
+                    )
+                    .disabled(isSubmitting)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .disabled(isSubmitting)
+                Button(isSubmitting ? "Sending..." : "Send Report", action: onSubmit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isSubmitting)
+            }
+        }
+        .padding(18)
+        .frame(width: 460)
     }
 }
 
