@@ -210,10 +210,13 @@ Last action status: \(lastStatus)
         let sleepShort = "/bin/sleep 1"
         let sleepReconnect = "/bin/sleep 2"
 
-        // Keep the interface administratively down only while changing MAC, then reconnect service.
-        let primarySequence = [interfaceDownCommand, sleepShort, setMACCommand, interfaceUpCommand, sleepShort, disableServiceCommand, sleepShort, enableServiceCommand, sleepReconnect]
-        let fallbackSequence = [setMACCommand, disableServiceCommand, sleepShort, enableServiceCommand, sleepReconnect]
-        let spoofScript = "(\(primarySequence.joined(separator: " && "))) || (\(fallbackSequence.joined(separator: " && ")))"
+        // Attempt MAC change with interface briefly down. Use semicolons (not &&) to ensure
+        // the interface and service are always restored even when MAC spoofing is blocked
+        // (e.g. by macOS restrictions). This prevents the Wi-Fi being left in a broken state.
+        let macAttempt = "(\(interfaceDownCommand) && \(sleepShort) && \(setMACCommand)) 2>/dev/null || true"
+        let restoreUp = "\(interfaceUpCommand) 2>/dev/null || true"
+        let recycleService = "\(disableServiceCommand) 2>/dev/null || true; \(sleepShort); \(enableServiceCommand)"
+        let spoofScript = "\(macAttempt); \(restoreUp); \(sleepShort); \(recycleService); \(sleepReconnect)"
 
         let appleScript = appleScriptDoShellScript(spoofScript, administratorPrivileges: true)
         let commandOutput = try await runProcess(
@@ -222,7 +225,7 @@ Last action status: \(lastStatus)
             arguments: ["-e", appleScript]
         )
 
-        let summary = "Spoofed MAC on \(interface.kind.rawValue) (\(interface.device), service: \(interface.networkService)) -> \(spoofedMAC)"
+        let summary = "MAC spoof attempted on \(interface.kind.rawValue) (\(interface.device), service: \(interface.networkService)) -> \(spoofedMAC); network service restarted"
         let trimmedCommandOutput = commandOutput.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmedCommandOutput.isEmpty {
