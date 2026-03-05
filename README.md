@@ -8,7 +8,7 @@
 
 ## Minimal macOS app with two actions
 
-- `Start Zoom`: spoofs a random MAC address on the active Wi-Fi/Ethernet interface, automatically disconnects/reconnects that network service, kills Zoom, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
+- `Start Zoom`: closes Zoom if it is running, stops immediately if a VPN interface is active, spoofs a random MAC address on the active Wi-Fi/Ethernet interface, automatically disconnects/reconnects that network service, clears Zoom local data/cache/preferences/log state, requests admin access to flush system DNS caches, and relaunches Zoom
 - `Report a Bug`: opens a small form for optional email + message, then sends diagnostics (app version, OS, architecture, timestamp, and the latest 200 log lines) to the bug report API
 
 The app runs local recovery commands for Error 1132 and performs network interface MAC spoofing/reconnect plus DNS cache reset via AppleScript (`do shell script ... with administrator privileges`) so macOS can present native admin-password prompts.

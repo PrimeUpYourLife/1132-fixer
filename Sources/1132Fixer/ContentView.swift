@@ -59,7 +59,13 @@ final class AppViewModel: ObservableObject {
 
     @Published var logs: [String] = []
     @Published var isRunning = false
-    private let resetZoomDataCommand = #"killall "zoom.us" 2>/dev/null; rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true"#
+    private let stopZoomCommand = #"""
+if /usr/bin/pgrep -x "zoom.us" >/dev/null 2>&1; then
+  /usr/bin/killall "zoom.us" 2>/dev/null || true
+  echo "Zoom was running and has been closed."
+fi
+"""#
+    private let resetZoomDataCommand = #"rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true"#
     private let stopZoomUpdatersCommand = #"""
 for proc in zAutoUpdate zPTUpdaterUI ZoomUpdater; do
   /usr/bin/pkill -x "$proc" 2>/dev/null || true
@@ -78,6 +84,12 @@ done
 
     func startZoom() {
         runTask("Start Zoom") {
+            self.appendLog("Step: Close Zoom if it is running")
+            let stopZoomOutput = try await self.runProcess(
+                stepName: "Close Zoom",
+                executable: Constants.bashPath,
+                arguments: ["-c", self.stopZoomCommand]
+            )
             self.appendLog("Step: Spoof MAC and reconnect active network (admin prompt expected)")
             let macSpoofOutput = try await self.spoofMACAndReconnectActiveInterface()
             self.appendLog("Step: Reset Zoom data")
@@ -105,7 +117,7 @@ done
                 arguments: ["-c", self.launchZoomCommand]
             )
 
-            return [macSpoofOutput, resetOutput, dnsOutput, stopUpdatersOutput, launchOutput]
+            return [stopZoomOutput, macSpoofOutput, resetOutput, dnsOutput, stopUpdatersOutput, launchOutput]
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 .joined(separator: "\n")
         }
@@ -284,10 +296,20 @@ Last action status: \(lastStatus)
             guard isSafeInterfaceName(value) else {
                 throw appError("Detect active network interface: Invalid interface name '\(value)'.")
             }
+            try ensureVPNIsNotActive(interfaceName: value)
             return value
         }
 
         throw appError("Detect active network interface: No default route interface was found. Connect to Wi-Fi or Ethernet and try again.")
+    }
+
+    private func ensureVPNIsNotActive(interfaceName: String) throws {
+        let normalized = interfaceName.lowercased()
+        let vpnPrefixes = ["utun", "ipsec", "ppp", "tun", "tap"]
+
+        if vpnPrefixes.contains(where: normalized.hasPrefix) {
+            throw appError("VPN detected on interface '\(interfaceName)'. Turn off your VPN and run Start Zoom again.")
+        }
     }
 
     private func parseHardwarePorts(from output: String) -> [String: String] {
