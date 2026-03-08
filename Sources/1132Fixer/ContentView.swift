@@ -63,6 +63,14 @@ final class AppViewModel: ObservableObject {
 if /usr/bin/pgrep -x "zoom.us" >/dev/null 2>&1; then
   /usr/bin/killall "zoom.us" 2>/dev/null || true
   echo "Zoom was running and has been closed."
+  for i in {1..10}; do
+    /usr/bin/pgrep -x "zoom.us" >/dev/null 2>&1 || break
+    /bin/sleep 0.5
+  done
+  if /usr/bin/pgrep -x "zoom.us" >/dev/null 2>&1; then
+    /usr/bin/killall -9 "zoom.us" 2>/dev/null || true
+    /bin/sleep 1
+  fi
 fi
 """#
     private let resetZoomDataCommand = #"rm -rf "$HOME/Library/Application Support/zoom.us" "$HOME/Library/Caches/us.zoom.xos" "$HOME/Library/Preferences/us.zoom.xos.plist" "$HOME/Library/Logs/zoom.us.log"* "$HOME/Library/Saved Application State/us.zoom.xos.savedState"; defaults delete us.zoom.xos 2>/dev/null || true"#
@@ -91,7 +99,12 @@ done
                 arguments: ["-c", self.stopZoomCommand]
             )
             self.appendLog("Step: Spoof MAC and reconnect active network (admin prompt expected)")
-            let macSpoofOutput = try await self.spoofMACAndReconnectActiveInterface()
+            let macSpoofOutput: String
+            do {
+                macSpoofOutput = try await self.spoofMACAndReconnectActiveInterface()
+            } catch {
+                macSpoofOutput = "MAC spoofing skipped: \(error.localizedDescription)"
+            }
             self.appendLog("Step: Reset Zoom data")
             let resetOutput = try await self.runProcess(
                 stepName: "Reset Zoom data",
@@ -215,8 +228,23 @@ Last action status: \(lastStatus)
         return String(bytes: values, encoding: .ascii) ?? "unknown"
     }
 
+    private func isMacSpoofingBlockedOnWiFi() -> Bool {
+        // macOS 14 (Sonoma) and later block Wi-Fi MAC spoofing at the driver level on Apple Silicon.
+        let isAppleSilicon = machineArchitecture() == "arm64"
+        let isMacOS14OrLater = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 14
+        return isAppleSilicon && isMacOS14OrLater
+    }
+
     private func spoofMACAndReconnectActiveInterface() async throws -> String {
         let interface = try await resolveActiveSupportedInterface()
+
+        if interface.kind == .wifi && isMacSpoofingBlockedOnWiFi() {
+            return """
+MAC spoofing skipped: Wi-Fi MAC spoofing is not supported on Apple Silicon Macs running macOS Sonoma (14) or later. \
+Zoom will be launched in a restricted sandbox environment instead, which forces it to generate a fresh device identity.
+"""
+        }
+
         let spoofedMAC = try generateRandomMACAddress()
 
         let setMACCommand = "(/sbin/ifconfig \(shellSingleQuote(interface.device)) lladdr \(shellSingleQuote(spoofedMAC)) || /sbin/ifconfig \(shellSingleQuote(interface.device)) ether \(shellSingleQuote(spoofedMAC)))"
@@ -424,18 +452,18 @@ disconnect, and reconnect before running Start Zoom again.
         guard FileManager.default.fileExists(atPath: zoomBinaryPath) else {
             return #"open -a "zoom.us""#
         }
-        // Launch Zoom under a sandbox that blocks reads of its stored device-fingerprint
-        // databases. This forces Zoom to generate a fresh device identity, helping bypass
+        // Launch Zoom under a sandbox that blocks reads of its entire stored device-fingerprint
+        // data directory. This forces Zoom to generate a fresh device identity, helping bypass
         // error 1132 on systems where ifconfig MAC spoofing is blocked (e.g. Apple Silicon
         // with macOS Sonoma 14+).
+        let dataDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/zoom.us/data")
+            .path
         let profile = """
 (version 1)
 (allow default)
 (deny file-read*
-  (regex
-    #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db$"
-    #"^/Users/[^.]+/Library/Application Support/zoom.us/data/.*\\.db-journal$"
-  )
+  (subpath "\(dataDir)")
 )
 """
         return "nohup /usr/bin/sandbox-exec -p \(shellSingleQuote(profile)) \(shellSingleQuote(zoomBinaryPath)) >/dev/null 2>&1 &"
