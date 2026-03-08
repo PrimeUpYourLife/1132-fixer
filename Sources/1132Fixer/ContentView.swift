@@ -243,7 +243,26 @@ Last action status: \(lastStatus)
             arguments: ["-e", appleScript]
         )
 
-        let summary = "MAC spoof attempted on \(interface.kind.rawValue) (\(interface.device), service: \(interface.networkService)) -> \(spoofedMAC); network service restarted"
+        // Verify the MAC was actually changed. macOS or some network adapters silently
+        // ignore ifconfig MAC changes, which would leave Zoom with the same banned MAC.
+        let verifyScript = "/sbin/ifconfig \(shellSingleQuote(interface.device)) | /usr/bin/awk '/^[[:space:]]*ether /{print $2; exit}'"
+        let actualMAC = (try? await runProcess(
+            stepName: "Verify MAC address",
+            executable: Constants.bashPath,
+            arguments: ["-c", verifyScript]
+        ))?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let macVerified = !actualMAC.isEmpty && actualMAC == spoofedMAC.lowercased()
+
+        let summary: String
+        if macVerified {
+            summary = "MAC spoofed on \(interface.kind.rawValue) (\(interface.device), service: \(interface.networkService)) -> \(spoofedMAC); network service restarted"
+        } else {
+            let detail = actualMAC.isEmpty
+                ? "Could not read current MAC address after spoofing."
+                : "Current MAC (\(actualMAC)) does not match target (\(spoofedMAC))."
+            summary = "Warning: MAC address was not changed on \(interface.kind.rawValue) (\(interface.device)). \(detail) Your macOS version or network adapter may be blocking MAC spoofing. Zoom may still show error 1132."
+        }
+
         let trimmedCommandOutput = commandOutput.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmedCommandOutput.isEmpty {

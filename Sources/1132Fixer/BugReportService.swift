@@ -29,15 +29,38 @@ enum BugReportService {
             return envValue
         }
 
-        guard let resourceURL = Bundle.module.url(forResource: envVar, withExtension: nil),
-              let data = try? Data(contentsOf: resourceURL),
-              let bundledValue = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !bundledValue.isEmpty else {
-            return fallback
+        // Avoid Bundle.module: the SPM-generated accessor calls Swift.fatalError() when the
+        // resource bundle is not found at the expected path, crashing the app for packaged builds
+        // where Bundle.main.bundleURL does not point to Contents/Resources/.
+        let resourceBundleName = "1132 Fixer_1132Fixer.bundle"
+        var bundlesToSearch: [Bundle] = []
+
+        // CLI / debug builds: the resource bundle sits beside the executable.
+        if let execURL = Bundle.main.executableURL {
+            let siblingURL = execURL.deletingLastPathComponent().appendingPathComponent(resourceBundleName)
+            if let b = Bundle(url: siblingURL) { bundlesToSearch.append(b) }
         }
 
-        return bundledValue
+        // Packaged .app builds: the resource bundle is in Contents/Resources/.
+        if let url = Bundle.main.url(forResource: "1132 Fixer_1132Fixer", withExtension: "bundle"),
+           let b = Bundle(url: url) {
+            bundlesToSearch.append(b)
+        }
+
+        bundlesToSearch.append(Bundle.main)
+
+        for bundle in bundlesToSearch {
+            guard let resourceURL = bundle.url(forResource: envVar, withExtension: nil),
+                  let data = try? Data(contentsOf: resourceURL),
+                  let bundledValue = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bundledValue.isEmpty else {
+                continue
+            }
+            return bundledValue
+        }
+
+        return fallback
     }
 
     static func sendBugReport(
