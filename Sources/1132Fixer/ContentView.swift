@@ -452,10 +452,9 @@ disconnect, and reconnect before running Start Zoom again.
         guard FileManager.default.fileExists(atPath: zoomBinaryPath) else {
             return #"open -a "zoom.us""#
         }
-        // Launch Zoom under a sandbox that blocks reads of its entire stored device-fingerprint
-        // data directory. This forces Zoom to generate a fresh device identity, helping bypass
-        // error 1132 on systems where ifconfig MAC spoofing is blocked (e.g. Apple Silicon
-        // with macOS Sonoma 14+).
+        // Bootstrap Zoom once under a restricted sandbox so it regenerates device identity data,
+        // then relaunch it normally. Leaving the long-running Zoom process inside sandbox-exec
+        // can prevent camera/video from working correctly.
         let dataDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/zoom.us/data")
             .path
@@ -466,7 +465,19 @@ disconnect, and reconnect before running Start Zoom again.
   (subpath "\(dataDir)")
 )
 """
-        return "nohup /usr/bin/sandbox-exec -p \(shellSingleQuote(profile)) \(shellSingleQuote(zoomBinaryPath)) >/dev/null 2>&1 &"
+        let encodedProfile = Data(profile.utf8).base64EncodedString()
+        return """
+nohup /bin/bash -c '
+profile_path="$(/usr/bin/mktemp "/tmp/1132fixer.zoom-sandbox.XXXXXX")" || exit 1
+/bin/echo \(shellSingleQuote(encodedProfile)) | /usr/bin/base64 --decode > "$profile_path" || exit 1
+/usr/bin/sandbox-exec -f "$profile_path" \(shellSingleQuote(zoomBinaryPath)) >/dev/null 2>&1 &
+bootstrap_pid=$!
+/bin/sleep 8
+/bin/kill "$bootstrap_pid" 2>/dev/null || true
+/bin/rm -f "$profile_path"
+/usr/bin/open -na "zoom.us"
+' >/dev/null 2>&1 &
+"""
     }
 
     private func generateRandomMACAddress() throws -> String {
