@@ -1,0 +1,21 @@
+name: Brand guard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  brand-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Check shipped brand assets
+        run: |
+          test -s design-system/scripts/brand-assets.sh || { echo "design-system submodule is missing or empty" >&2; exit 1; }
+          design-system/scripts/brand-assets.sh check . .brand-assets.tsv
