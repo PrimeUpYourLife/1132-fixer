@@ -1,0 +1,138 @@
+# Verifies that every published release asset is genuinely notarized.
+#
+# This inspects the SHIPPED BYTES. It reads no build configuration and trusts
+# no claim made by the build script. It fails closed: a missing asset, an
+# un-notarized asset, an unstapled asset, or a check that could not run are all
+# failures. There is no path through this workflow that reports success without
+# a proven ticket.
+#
+# Runner: macOS, deliberately. `stapler validate`, `codesign --verify` and
+# `spctl --assess` are strictly stronger than any parse we can do off-platform,
+# and this repository is public, so GitHub-hosted macOS minutes cost nothing.
+# The portable parser runs here too, so the two agree or the job fails.
+#
+# Coverage boundary, stated plainly: this runs AFTER a release is published.
+# The gate that blocks a bad image BEFORE it is uploaded lives in
+# scripts/build-universal-dmg.sh, which now notarizes, staples and verifies
+# unconditionally on the release path. This workflow is the backstop that
+# catches an image built or uploaded some other way.
+#
+# No secret is referenced by this workflow. Notarization transcripts are never
+# printed, because they can carry submission metadata and local paths.
+name: Release notarization
+
+on:
+  release:
+    types: [published, released, edited, prereleased]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to verify, e.g. v1.7.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-notarization-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify-published-artifact:
+    name: Published DMG carries a stapled Apple ticket
+    runs-on: macos-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          if [[ -z "$TAG" ]]; then
+            echo "NO_TAG_RESOLVED: cannot determine which release to verify." >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Verifying release $TAG"
+
+      - name: Download release disk images
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts \
+            --pattern '*.dmg'
+          COUNT="$(find artifacts -name '*.dmg' -type f | wc -l | tr -d '[:space:]')"
+          if [[ "$COUNT" == "0" ]]; then
+            echo "NO_DMG_ASSET: release $TAG has no .dmg asset to verify." >&2
+            echo "A macOS release with nothing to check is not a passing release." >&2
+            exit 1
+          fi
+          echo "Found $COUNT disk image(s)."
+
+      - name: Refuse artifacts marked un-notarized by the build script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find artifacts -name '*UNNOTARIZED*' -type f | grep -q .; then
+            echo "UNNOTARIZED_ASSET_PUBLISHED: a local-development image was published." >&2
+            exit 1
+          fi
+
+      - name: Verify with Apple tooling (stapler, codesign, spctl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          find artifacts -name '*.dmg' -type f -print0 | while IFS= read -r -d '' DMG; do
+            echo "::group::Apple tooling: $(basename "$DMG")"
+            xcrun stapler validate -v "$DMG"
+            codesign --verify --verbose=2 "$DMG"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
+            echo "::endgroup::"
+          done
+
+      - name: Verify with the portable ticket parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "CHECK_COULD_NOT_RUN: python3 unavailable. unknown is not notarized." >&2
+            exit 1
+          fi
+          find artifacts -name '*.dmg' -type f -print0 | while IFS= read -r -d '' DMG; do
+            echo "::group::Ticket parse: $(basename "$DMG")"
+            python3 scripts/verify-notarization.py "$DMG"
+            echo "::endgroup::"
+          done
+
+      - name: Record result
+        if: always()
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Release notarization — \`$TAG\`"
+            echo
+            echo "Outcome: **${{ job.status }}**"
+            echo
+            echo "Checked on macOS with \`stapler validate\`, \`codesign --verify\`,"
+            echo "\`spctl --assess\`, and the repository's portable ticket parser."
+            echo
+            echo "This proves an Apple-issued ticket is stapled to the published bytes"
+            echo "and bound to their own cdhash. It does not prove Gatekeeper acceptance"
+            echo "on an end user's machine at some later date, and it cannot detect a"
+            echo "ticket or certificate revoked after this run."
+          } >> "$GITHUB_STEP_SUMMARY"

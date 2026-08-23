@@ -68,3 +68,6 @@ Sources/1132Fixer/Resources/FIXER_BUG_REPORT_TOKEN
 .codex/
 apple-developer.txt
 Debug
+# Python bytecode from scripts/
+__pycache__/
+*.pyc

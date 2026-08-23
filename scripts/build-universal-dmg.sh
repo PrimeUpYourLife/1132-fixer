@@ -57,8 +57,17 @@ DMG_STAGING_DIR="$TEMP_BUILD_ROOT/dmg-staging"
 # Required for distribution: Developer ID Application identity.
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 
-# Set NOTARIZE=0 to skip notarization.
+# Notarization is mandatory for anything that leaves this machine.
+#
+# NOTARIZE=0 is a LOCAL-DEVELOPMENT escape hatch only. It is refused outright on
+# the release path (CI, or RELEASE_BUILD=1), and when it is used the resulting
+# image is renamed so it can never be mistaken for, or uploaded as, a release
+# asset. Only the exact values "1" and "0" are accepted -- see the policy gate
+# below. Anything else is a hard error rather than a silent skip.
 NOTARIZE="${NOTARIZE:-1}"
+
+# Set RELEASE_BUILD=1 for any build whose output may be published.
+RELEASE_BUILD="${RELEASE_BUILD:-0}"
 
 APPLE_ID="${APPLE_ID:-}"
 APPLE_PASSWORD="${APPLE_PASSWORD:-}"
@@ -73,6 +82,36 @@ if [[ -f "$APPLE_DEVELOPER_FILE" ]]; then
   # shellcheck disable=SC1090
   source "$APPLE_DEVELOPER_FILE"
   set +a
+fi
+
+# ---------------------------------------------------------------------------
+# Notarization policy gate
+#
+# Runs after $APPLE_DEVELOPER_FILE is sourced, because that file can also set
+# NOTARIZE, and before anything is built, signed or deleted. Fails closed: an
+# unrecognised value is an error, never a skip.
+# ---------------------------------------------------------------------------
+case "$NOTARIZE" in
+  1|0) ;;
+  *)
+    echo "NOTARIZE_INVALID: NOTARIZE must be exactly '1' or '0' (got '$NOTARIZE')." >&2
+    echo "Refusing to guess. An unrecognised value used to skip notarization silently." >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$NOTARIZE" != "1" ]]; then
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" || "$RELEASE_BUILD" == "1" ]]; then
+    echo "NOTARIZE_DISABLED_ON_RELEASE_PATH: notarization cannot be skipped on a release or CI build." >&2
+    exit 1
+  fi
+
+  DMG_PATH="$DIST_DIR/$APP_NAME-v$APP_VERSION-universal-UNNOTARIZED-DO-NOT-DISTRIBUTE.dmg"
+  echo "############################################################" >&2
+  echo "## NOTARIZATION DISABLED -- LOCAL DEVELOPMENT BUILD ONLY   ##" >&2
+  echo "## Output is named UNNOTARIZED-DO-NOT-DISTRIBUTE.          ##" >&2
+  echo "## Gatekeeper will reject it. Never publish this image.    ##" >&2
+  echo "############################################################" >&2
 fi
 
 decode_base64_to_file() {
@@ -299,14 +338,46 @@ if [[ "$NOTARIZE" == "1" ]]; then
     exit 1
   fi
 
+  # notarytool writes its transcript to a file that is never echoed: it can
+  # contain submission metadata and local paths. Only the status word is
+  # printed. `notarytool submit --wait` is not reliably non-zero on an
+  # `Invalid` result, so the status is parsed and required to be `Accepted`.
+  NOTARY_TRANSCRIPT="$TEMP_BUILD_ROOT/notarytool-submit.log"
+  set +e
   xcrun notarytool submit "$DMG_PATH" \
     --apple-id "$APPLE_ID" \
     --password "$APPLE_PASSWORD" \
     --team-id "$APPLE_TEAM_ID" \
-    --wait
+    --wait > "$NOTARY_TRANSCRIPT" 2>&1
+  NOTARY_EXIT=$?
+  set -e
+
+  NOTARY_STATUS="$(awk -F': *' '/^[[:space:]]*status:/ { print $2 }' "$NOTARY_TRANSCRIPT" | tail -n 1 | tr -d '[:space:]')"
+  echo "==> Notary result: status=${NOTARY_STATUS:-<none>} exit=$NOTARY_EXIT"
+  echo "    (full transcript withheld from the log: $NOTARY_TRANSCRIPT)"
+
+  if [[ "$NOTARY_EXIT" -ne 0 || "$NOTARY_STATUS" != "Accepted" ]]; then
+    echo "NOTARIZATION_NOT_ACCEPTED: notary service did not return Accepted." >&2
+    echo "Inspect $NOTARY_TRANSCRIPT manually. Nothing is published from this build." >&2
+    exit 1
+  fi
 
   echo "==> Stapling notarization ticket"
   xcrun stapler staple "$DMG_PATH"
+
+  # Prove the ticket from the finished artifact, not from the fact that the
+  # commands above exited 0. This is the same check CI runs on the published
+  # asset; running it here blocks a bad image BEFORE it can be uploaded.
+  echo "==> Verifying stapled ticket on the finished DMG"
+  xcrun stapler validate "$DMG_PATH"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "VERIFIER_UNAVAILABLE: python3 is required to verify the stapled ticket." >&2
+    echo "unknown is not notarized -- refusing to declare this build releasable." >&2
+    exit 1
+  fi
+  python3 "$ROOT_DIR/scripts/verify-notarization.py" "$DMG_PATH"
 fi
 
 echo "==> Done"

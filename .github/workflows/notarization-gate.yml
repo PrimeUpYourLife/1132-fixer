@@ -1,0 +1,43 @@
+# Proves the notarization checker itself, on every change.
+#
+# This job is the guard on the guard. It runs the checker against synthesized
+# artifacts that are deliberately broken -- no ticket, an empty ticket, a
+# ticket with the wrong container magic, a ticket issued by someone other than
+# Apple, and a real-shaped ticket belonging to a DIFFERENT build -- and
+# requires the checker to reject every one of them. It also executes
+# scripts/build-universal-dmg.sh with hostile NOTARIZE values and requires the
+# release path to refuse them.
+#
+# No fixture is committed. Everything is built in a temp directory at test time.
+name: Notarization gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notarization-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verifier-tests:
+    name: Verifier rejects un-notarized artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run notarization gate tests
+        run: python3 scripts/tests/test_verify_notarization.py
