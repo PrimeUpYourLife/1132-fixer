@@ -3,7 +3,7 @@ name: Brand guard
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -16,6 +16,7 @@ jobs:
         with:
           submodules: true
       - name: Check shipped brand assets
+        shell: bash
         run: |
           test -s design-system/scripts/brand-assets.sh || { echo "design-system submodule is missing or empty" >&2; exit 1; }
           design-system/scripts/brand-assets.sh check . .brand-assets.tsv
